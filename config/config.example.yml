@@ -1,0 +1,99 @@
+﻿app:
+  name: Speech To Text Service
+  version: 1.0.0
+  host: 0.0.0.0
+  port: 8000
+  log_level: INFO
+  request_timeout_sec: 300
+  enable_docs: true
+  docs_url: /docs
+  redoc_url: /redoc
+  openapi_url: /openapi.json
+
+storage:
+  runtime_dir: runtime
+  upload_dir: runtime/uploads
+  output_dir: runtime/outputs
+  model_dir: runtime/models
+  cleanup_temp_after_request: true
+  max_upload_mb: 2048
+
+processing:
+  ffmpeg_binary: ffmpeg
+  ffprobe_binary: ffprobe
+  audio_codec: pcm_s16le
+  audio_sample_rate: 16000
+  audio_channels: 1
+  always_extract_audio: true
+  extracted_audio_format: wav
+  preserve_original_upload: false
+
+admin:
+  enabled: true
+  require_auth: false
+  token: ""
+  header_name: x-admin-token
+
+transcription:
+  default_provider: local
+  default_language: null
+  default_prompt: null
+  default_response_format: verbose_json
+  enable_word_timestamps: true
+  enable_segment_timestamps: true
+
+local:
+  backend: faster_whisper
+  model_id: small
+  device: auto
+  compute_type: auto
+  cpu_threads: 4
+  num_workers: 1
+  vad_filter: true
+  beam_size: 5
+  best_of: 5
+  patience: 1.0
+  temperature: 0.0
+  condition_on_previous_text: true
+  initial_prompt: null
+
+providers:
+  openai:
+    enabled: false
+    base_url: https://api.openai.com
+    api_key: ""
+    model: whisper-1
+    transcriptions_path: /v1/audio/transcriptions
+    timeout_sec: 300
+  groq:
+    enabled: false
+    base_url: https://api.groq.com/openai
+    api_key: ""
+    model: whisper-large-v3
+    transcriptions_path: /v1/audio/transcriptions
+    timeout_sec: 300
+  custom:
+    enabled: false
+    base_url: ""
+    api_key: ""
+    model: ""
+    transcriptions_path: /v1/audio/transcriptions
+    timeout_sec: 300
+    auth_header: Authorization
+    auth_scheme: Bearer
+
+mirrors:
+  huggingface_base: https://huggingface.co
+  huggingface_mirror_base: https://hf.devneeds.ir
+  prefer_mirror: true
+  fallback_to_official: true
+
+downloads:
+  enabled: true
+  max_concurrent_jobs: 2
+  chunk_size: 1048576
+  timeout_sec: 1800
+  allow_resume: true
+  allowed_domains:
+    - huggingface.co
+    - hf.devneeds.ir

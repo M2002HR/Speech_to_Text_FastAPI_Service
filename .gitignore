@@ -1,0 +1,9 @@
+﻿__pycache__/
+.venv/
+.env
+.pytest_cache/
+*.pyc
+config/config.yml
+runtime/
+.reference_repo/
+.tmp_*

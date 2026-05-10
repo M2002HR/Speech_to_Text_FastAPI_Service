@@ -1,0 +1,183 @@
+﻿# Speech To Text Service (FastAPI)
+
+A production-oriented FastAPI service that converts audio/video files to text.
+
+Features:
+- Upload audio or video files
+- Automatic video-to-audio extraction via ffmpeg
+- Local transcription backend (`faster-whisper`)
+- API-based transcription backends (OpenAI-compatible: OpenAI / Groq / Custom)
+- Model download job system (create/list/status/cancel)
+- Hugging Face URL builder with mirror support (including `https://hf.devneeds.ir`)
+- Fully configurable via `config.yml` + `.env`
+- Swagger/OpenAPI docs and test suite
+
+## Project Structure
+
+- `api/app/main.py`: FastAPI routes and app bootstrap
+- `api/app/config.py`: configuration loader (`env > config.yml > defaults`)
+- `api/app/services.py`: media processing, transcription, download jobs
+- `api/app/schemas.py`: request/response schemas
+- `config/config.example.yml`: example YAML config
+- `.env.example`: complete environment variable reference
+- `tests/`: API/config/service tests
+- `scripts/start.sh`: Linux/macOS startup script
+- `scripts/start.ps1`: Windows PowerShell startup script
+
+## Prerequisites
+
+- Python 3.10+
+- ffmpeg + ffprobe available in PATH
+
+## Install ffmpeg
+
+### Linux (Ubuntu/Debian)
+
+```bash
+sudo apt update
+sudo apt install -y ffmpeg
+```
+
+### Windows
+
+1. Install ffmpeg (e.g., via `winget` or manual zip).
+2. Ensure `ffmpeg` and `ffprobe` are available in your PATH.
+
+Example with winget:
+
+```powershell
+winget install --id Gyan.FFmpeg -e
+```
+
+## Setup
+
+### Linux/macOS
+
+```bash
+python -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
+cp .env.example .env
+cp config/config.example.yml config/config.yml
+```
+
+### Windows (PowerShell)
+
+```powershell
+python -m venv .venv
+.\.venv\Scripts\Activate.ps1
+pip install -r requirements.txt
+Copy-Item .env.example .env
+Copy-Item config\config.example.yml config\config.yml
+```
+
+## Run the Service
+
+### Linux/macOS
+
+```bash
+uvicorn api.app.main:app --host 0.0.0.0 --port 8000 --reload
+```
+
+or
+
+```bash
+chmod +x scripts/start.sh
+./scripts/start.sh
+```
+
+### Windows (PowerShell)
+
+```powershell
+python -m uvicorn api.app.main:app --host 0.0.0.0 --port 8000 --reload
+```
+
+or
+
+```powershell
+.\scripts\start.ps1
+```
+
+## API Docs
+
+- Swagger UI: `http://127.0.0.1:8000/docs`
+- ReDoc: `http://127.0.0.1:8000/redoc`
+
+## Core Endpoints
+
+- `GET /health`
+- `GET /providers`
+- `POST /transcribe`
+
+## Admin Endpoints
+
+- `GET /admin/system/config-effective`
+- `GET /admin/models/presets`
+- `GET /admin/mirrors`
+- `POST /admin/models/url/huggingface-file`
+- `POST /admin/downloads`
+- `GET /admin/downloads`
+- `GET /admin/downloads/{job_id}`
+- `POST /admin/downloads/{job_id}/cancel`
+
+## Transcription Example
+
+### Linux/macOS
+
+```bash
+curl -X POST http://127.0.0.1:8000/transcribe \
+  -F "file=@sample.mp4" \
+  -F "provider=local" \
+  -F "model=small" \
+  -F "language=fa"
+```
+
+### Windows (PowerShell with `curl.exe`)
+
+```powershell
+curl.exe -X POST http://127.0.0.1:8000/transcribe `
+  -F "file=@sample.mp4" `
+  -F "provider=local" `
+  -F "model=small" `
+  -F "language=fa"
+```
+
+## Hugging Face Mirror Notes
+
+To build direct model file URLs using mirror base:
+- Use `POST /admin/models/url/huggingface-file`
+- Set `use_mirror=true` in request body
+- Configure mirror via:
+  - `MIRRORS_HUGGINGFACE_MIRROR_BASE` (default: `https://hf.devneeds.ir`)
+  - `MIRRORS_PREFER_MIRROR`
+  - `MIRRORS_FALLBACK_TO_OFFICIAL`
+
+## Tests
+
+### Linux/macOS
+
+```bash
+pytest -q
+```
+
+### Windows (PowerShell)
+
+```powershell
+pytest -q
+```
+
+## Configuration Priority
+
+The service loads config in this order:
+
+1. defaults in code
+2. `config/config.yml`
+3. environment variables (`.env` / process env)
+
+Final precedence: `env > config.yml > defaults`
+
+## Important Behavior
+
+- No model is downloaded automatically unless you explicitly create a download job.
+- Download endpoints are job-based and track progress/status.
+- Local transcription requires `faster-whisper` runtime dependencies if you enable local processing in production.
