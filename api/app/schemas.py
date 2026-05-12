@@ -74,6 +74,27 @@ class TranscriptionResponse(BaseModel):
     metadata: Dict[str, Any] = Field(default_factory=dict)
 
 
+class TranscriptionJobResponse(BaseModel):
+    job_id: str
+    status: Literal["pending", "running", "completed", "failed", "cancelled"]
+    provider: str
+    model: str
+    source_filename: str
+    source_content_type: Optional[str] = None
+    created_at: datetime
+    started_at: Optional[datetime] = None
+    completed_at: Optional[datetime] = None
+    progress_percent: float = 0.0
+    stage: str = "queued"
+    error: Optional[str] = None
+    result: Optional[Dict[str, Any]] = None
+
+
+class TranscriptionJobListResponse(BaseModel):
+    total: int
+    items: List[TranscriptionJobResponse]
+
+
 class MirrorInfoResponse(BaseModel):
     huggingface_base: str
     huggingface_mirror_base: str
@@ -132,11 +153,87 @@ class LocalModelPreset(BaseModel):
     name: str
     repo_id: str
     notes: str
+    variant: Optional[str] = None
+    parameters_million: Optional[int] = None
+    estimated_model_bin_mb: Optional[int] = None
+    estimated_vram_gb: Optional[float] = None
+    context_tokens: Optional[int] = None
+    multilingual: Optional[bool] = None
 
 
 class LocalModelPresetsResponse(BaseModel):
     total: int
     items: List[LocalModelPreset]
+
+
+class LocalModelFileInfo(BaseModel):
+    path: str
+    size_bytes: int
+
+
+class LocalModelInfo(BaseModel):
+    model_id: str
+    display_name: str
+    path: str
+    total_size_bytes: int
+    model_bin_size_bytes: Optional[int] = None
+    file_count: int
+    updated_at: datetime
+    files: List[LocalModelFileInfo]
+    variant: Optional[str] = None
+    parameters_million: Optional[int] = None
+    estimated_model_bin_mb: Optional[int] = None
+    estimated_vram_gb: Optional[float] = None
+    context_tokens: Optional[int] = None
+    multilingual: Optional[bool] = None
+
+
+class LocalModelsResponse(BaseModel):
+    total: int
+    model_root: str
+    items: List[LocalModelInfo]
+
+
+class LocalModelDownloadRequest(BaseModel):
+    preset_name: Optional[str] = None
+    repo_id: Optional[str] = None
+    revision: str = "main"
+    use_mirror: Optional[bool] = True
+    output_subdir: Optional[str] = None
+    files: Optional[List[str]] = None
+
+
+class DownloadBatchResponse(BaseModel):
+    total: int
+    items: List[DownloadJobResponse]
+
+
+class RemoteModelRepoInfo(BaseModel):
+    repo_id: str
+    downloads: Optional[int] = None
+    likes: Optional[int] = None
+    last_modified: Optional[datetime] = None
+    private: Optional[bool] = None
+    gated: Optional[bool] = None
+
+
+class RemoteModelRepoListResponse(BaseModel):
+    total: int
+    items: List[RemoteModelRepoInfo]
+
+
+class RemoteModelFileInfo(BaseModel):
+    path: str
+    size_bytes: Optional[int] = None
+    lfs_size_bytes: Optional[int] = None
+
+
+class RemoteModelFilesResponse(BaseModel):
+    repo_id: str
+    revision: str
+    total: int
+    recommended_files: List[str]
+    items: List[RemoteModelFileInfo]
 
 
 class EffectiveConfigResponse(BaseModel):

@@ -1,0 +1,239 @@
+<!doctype html>
+<html lang="fa" dir="rtl">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Speech Studio</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;700;800&family=Vazirmatn:wght@400;500;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/ui-assets/styles.css?v=20260512d" />
+</head>
+<body>
+  <div class="bg-orb orb-a"></div>
+  <div class="bg-orb orb-b"></div>
+  <div class="bg-grid"></div>
+
+  <main class="container">
+    <header class="hero">
+      <div>
+        <p class="eyebrow">Speech To Text FastAPI</p>
+        <h1>داشبورد تبدیل گفتار</h1>
+        <p class="subtitle">آپلود فایل، تنظیم کامل پردازش، مدیریت مدل‌های لوکال و دانلود مستقیم از آینه devneeds.</p>
+      </div>
+      <div class="hero-status" id="healthCard">
+        <div class="status-row">
+          <span>وضعیت سرویس</span>
+          <strong id="healthStatus">...</strong>
+        </div>
+        <div class="status-row">
+          <span>ffmpeg</span>
+          <strong id="ffmpegStatus">...</strong>
+        </div>
+        <div class="status-row">
+          <span>ffprobe</span>
+          <strong id="ffprobeStatus">...</strong>
+        </div>
+        <div class="status-row">
+          <span>Provider پیش‌فرض</span>
+          <strong id="defaultProvider">...</strong>
+        </div>
+      </div>
+    </header>
+
+    <section class="card stack-lg">
+      <div class="card-title-row">
+        <h2>اتصال ادمین</h2>
+        <button id="btnReloadAll" class="btn ghost">ریفرش همه</button>
+      </div>
+      <div class="grid cols-3">
+        <label>
+          <span>Admin Token (اختیاری)</span>
+          <input id="adminToken" type="password" placeholder="x-admin-token" />
+        </label>
+        <label>
+          <span>Header Name</span>
+          <input id="adminHeader" type="text" value="x-admin-token" />
+        </label>
+        <div class="inline-end">
+          <button id="btnSaveAdmin" class="btn">ذخیره</button>
+        </div>
+      </div>
+      <p class="hint">اگر `ADMIN_REQUIRE_AUTH=true` باشد، برای endpointهای مدیریتی لازم است.</p>
+    </section>
+
+    <section class="card stack-lg">
+      <div class="card-title-row">
+        <h2>شروع ترنسکریپت</h2>
+        <span class="chip">فرم اصلی</span>
+      </div>
+      <form id="transcribeForm" class="stack-lg">
+        <div class="grid cols-2">
+          <label>
+            <span>فایل صوتی/ویدیویی</span>
+            <input id="fileInput" name="file" type="file" accept="audio/*,video/*" required />
+          </label>
+          <label>
+            <span>Provider</span>
+            <select id="providerInput" name="provider"></select>
+          </label>
+        </div>
+
+        <div class="grid cols-3">
+          <label>
+            <span>Model</span>
+            <input id="modelInput" name="model" placeholder="small یا /abs/path/to/model" />
+          </label>
+          <label>
+            <span>Language</span>
+            <input id="languageInput" name="language" placeholder="fa / en / auto" />
+          </label>
+          <label>
+            <span>Response Format</span>
+            <select id="responseFormatInput" name="response_format">
+              <option value="">default</option>
+              <option value="text">text</option>
+              <option value="json">json</option>
+              <option value="verbose_json">verbose_json</option>
+              <option value="srt">srt</option>
+              <option value="vtt">vtt</option>
+            </select>
+          </label>
+        </div>
+
+        <div class="grid cols-3">
+          <label>
+            <span>Temperature</span>
+            <input id="temperatureInput" name="temperature" type="number" min="0" max="1" step="0.05" placeholder="0.0" />
+          </label>
+          <label>
+            <span>Prompt</span>
+            <input id="promptInput" name="prompt" placeholder="Context prompt" />
+          </label>
+          <div class="toggle-wrap">
+            <label class="toggle"><input id="wordTimestampsInput" name="word_timestamps" type="checkbox" /><span>Word timestamps</span></label>
+            <label class="toggle"><input id="segmentTimestampsInput" name="segment_timestamps" type="checkbox" checked /><span>Segment timestamps</span></label>
+            <label class="toggle"><input id="vadFilterInput" name="vad_filter" type="checkbox" checked /><span>VAD filter</span></label>
+          </div>
+        </div>
+
+        <div class="actions">
+          <button id="btnTranscribe" class="btn primary" type="submit">شروع پردازش</button>
+          <span id="transcribeStatus" class="hint"></span>
+        </div>
+        <div class="item">
+          <div class="item-head">
+            <strong>پیشرفت پردازش مدل</strong>
+            <span id="transcribePercent" class="chip">0%</span>
+          </div>
+          <div class="progress"><span id="transcribeProgressBar"></span></div>
+          <p id="transcribeJobMeta" class="hint">job: -</p>
+        </div>
+      </form>
+    </section>
+
+    <section class="card stack-lg">
+      <div class="card-title-row">
+        <h2>نتیجه</h2>
+        <button id="btnCopyText" class="btn ghost">کپی متن</button>
+      </div>
+      <div id="transcribeResult" class="result">هنوز پردازشی انجام نشده است.</div>
+    </section>
+
+    <section class="card stack-lg">
+      <div class="card-title-row">
+        <h2>مدل‌های آماده</h2>
+        <button id="btnRefreshModels" class="btn ghost">بروزرسانی</button>
+      </div>
+      <div class="grid cols-2">
+        <div>
+          <h3>مدل‌های سرویس‌دهنده‌ها</h3>
+          <div id="providerModels" class="list"></div>
+        </div>
+        <div>
+          <h3>مدل‌های پیشنهادی</h3>
+          <div id="presetModels" class="list"></div>
+        </div>
+      </div>
+      <div>
+        <h3>مدل‌های دانلودشده</h3>
+        <div id="localModels" class="list"></div>
+      </div>
+      <div class="stack-lg">
+        <div class="card-title-row">
+          <h3>مدل‌های آنلاین (داینامیک)</h3>
+          <div class="actions">
+            <input id="remoteSearchInput" placeholder="مثال: faster-whisper" />
+            <button id="btnSearchRemote" class="btn ghost" type="button">جستجو</button>
+          </div>
+        </div>
+        <div id="remoteModels" class="list"></div>
+      </div>
+    </section>
+
+    <section class="card stack-lg">
+      <div class="card-title-row">
+        <h2>دانلود مدل جدید (devneeds / HuggingFace mirror)</h2>
+        <button id="btnDownloadModel" class="btn primary">شروع دانلود</button>
+      </div>
+      <div class="grid cols-3">
+        <label>
+          <span>Preset Name</span>
+          <select id="downloadPreset">
+            <option value="">انتخاب اختیاری preset</option>
+          </select>
+        </label>
+        <label>
+          <span>Repo ID (اختیاری)</span>
+          <input id="downloadRepo" placeholder="Systran/faster-whisper-small" />
+        </label>
+        <label>
+          <span>Revision</span>
+          <input id="downloadRevision" value="main" />
+        </label>
+      </div>
+      <div class="grid cols-3">
+        <label>
+          <span>Output Subdir</span>
+          <input id="downloadSubdir" placeholder="faster-whisper-small" />
+        </label>
+        <label>
+          <span>Files (comma separated)</span>
+          <input id="downloadFiles" placeholder="خالی بگذار تا خودکار از اینترنت انتخاب شود" />
+        </label>
+        <label class="toggle single">
+          <input id="downloadUseMirror" type="checkbox" checked />
+          <span>استفاده از mirror (`hf.devneeds.ir`)</span>
+        </label>
+      </div>
+      <p class="hint">اگر preset را انتخاب کنی، repo و subdir به‌صورت خودکار پر می‌شود.</p>
+      <div>
+        <h3>فایل‌های واقعی Repo</h3>
+        <div id="remoteRepoFiles" class="list"></div>
+      </div>
+    </section>
+
+    <section class="card stack-lg">
+      <div class="card-title-row">
+        <h2>وضعیت دانلودها</h2>
+        <button id="btnRefreshJobs" class="btn ghost">بروزرسانی</button>
+      </div>
+      <div id="downloadJobs" class="list"></div>
+    </section>
+  </main>
+
+  <template id="jobTemplate">
+    <article class="item">
+      <div class="item-head">
+        <strong class="job-title"></strong>
+        <span class="job-status chip"></span>
+      </div>
+      <p class="mono job-url"></p>
+      <div class="progress"><span></span></div>
+      <div class="item-meta"></div>
+    </article>
+  </template>
+
+  <script src="/ui-assets/app.js?v=20260512d" defer></script>
+</body>
+</html>
