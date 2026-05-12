@@ -8,3 +8,6 @@ PyYAML==6.0.2
 python-dotenv==1.0.1
 pytest==8.3.4
 pytest-asyncio==0.24.0
+faster-whisper==1.2.1
+ctranslate2==4.7.1
+socksio==1.0.0

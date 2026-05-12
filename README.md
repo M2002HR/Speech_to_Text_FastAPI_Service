@@ -10,6 +10,7 @@ Features:
 - Model download job system (create/list/status/cancel)
 - Hugging Face URL builder with mirror support (including `https://hf.devneeds.ir`)
 - Fully configurable via `config.yml` + `.env`
+- Modern built-in web UI dashboard at `/` (upload, settings, model management, download jobs)
 - Swagger/OpenAPI docs and test suite
 
 ## Project Structure
@@ -100,6 +101,7 @@ or
 
 ## API Docs
 
+- Web UI: `http://127.0.0.1:8000/`
 - Swagger UI: `http://127.0.0.1:8000/docs`
 - ReDoc: `http://127.0.0.1:8000/redoc`
 
@@ -108,11 +110,18 @@ or
 - `GET /health`
 - `GET /providers`
 - `POST /transcribe`
+- `POST /transcribe/jobs`
+- `GET /transcribe/jobs`
+- `GET /transcribe/jobs/{job_id}`
 
 ## Admin Endpoints
 
 - `GET /admin/system/config-effective`
 - `GET /admin/models/presets`
+- `GET /admin/models/local`
+- `GET /admin/models/remote/repos`
+- `GET /admin/models/remote/files`
+- `POST /admin/models/local/download`
 - `GET /admin/mirrors`
 - `POST /admin/models/url/huggingface-file`
 - `POST /admin/downloads`
@@ -180,4 +189,5 @@ Final precedence: `env > config.yml > defaults`
 
 - No model is downloaded automatically unless you explicitly create a download job.
 - Download endpoints are job-based and track progress/status.
+- Async transcription jobs are available and expose progress percent/status for UI polling.
 - Local transcription requires `faster-whisper` runtime dependencies if you enable local processing in production.
