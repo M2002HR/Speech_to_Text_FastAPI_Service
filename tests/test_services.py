@@ -14,7 +14,7 @@ from api.app.services import DownloadManager, LocalTranscriber, normalize_proxy_
 
 def _settings() -> Settings:
     s = Settings()
-    s.downloads.allowed_domains = ["huggingface.co", "hf.devneeds.ir"]
+    s.downloads.allowed_domains = ["huggingface.co"]
     return s
 
 
@@ -22,7 +22,7 @@ def _run(coro):
     return asyncio.run(coro)
 
 
-def test_build_hf_mirror_url() -> None:
+def test_build_hf_url() -> None:
     settings = _settings()
     mgr = DownloadManager(settings=settings, client=None)  # type: ignore[arg-type]
 
@@ -30,21 +30,6 @@ def test_build_hf_mirror_url() -> None:
         repo_id="openai/whisper-large-v3",
         filename="config.json",
         revision="main",
-        use_mirror=True,
-    )
-    assert out["source"] == "mirror"
-    assert out["url"].startswith("https://hf.devneeds.ir/")
-
-
-def test_build_hf_official_url() -> None:
-    settings = _settings()
-    mgr = DownloadManager(settings=settings, client=None)  # type: ignore[arg-type]
-
-    out = mgr.build_hf_file_url(
-        repo_id="openai/whisper-large-v3",
-        filename="config.json",
-        revision="main",
-        use_mirror=False,
     )
     assert out["source"] == "official"
     assert out["url"].startswith("https://huggingface.co/")
@@ -82,7 +67,7 @@ def test_create_local_model_jobs_with_preset() -> None:
         ]
 
     async def _fake_resolve_hf_file_url(**kwargs):
-        return {"source": "mirror", "url": f"https://hf.devneeds.ir/{kwargs['repo_id']}/resolve/{kwargs['revision']}/{kwargs['filename']}"}
+        return {"source": "official", "url": f"https://huggingface.co/{kwargs['repo_id']}/resolve/{kwargs['revision']}/{kwargs['filename']}"}
 
     mgr.fetch_remote_repo_files = _fake_fetch_remote_repo_files  # type: ignore[assignment]
     mgr.resolve_hf_file_url = _fake_resolve_hf_file_url  # type: ignore[assignment]
@@ -92,13 +77,12 @@ def test_create_local_model_jobs_with_preset() -> None:
             preset_name="faster-whisper-small",
             repo_id=None,
             revision="main",
-            use_mirror=True,
             output_subdir=None,
             files=None,
         )
     )
     assert len(created) == 4
-    assert all("hf.devneeds.ir" in job.resolved_url for job in created)
+    assert all("huggingface.co" in job.resolved_url for job in created)
 
 
 def test_create_local_model_jobs_with_explicit_files_without_remote_fetch() -> None:
@@ -119,7 +103,6 @@ def test_create_local_model_jobs_with_explicit_files_without_remote_fetch() -> N
             preset_name=None,
             repo_id="Systran/faster-whisper-small",
             revision="main",
-            use_mirror=True,
             output_subdir="x",
             files=["config.json", "model.bin"],
         )
@@ -135,7 +118,7 @@ def test_create_local_model_jobs_fallback_when_remote_unreachable() -> None:
         raise HTTPException(status_code=503, detail="network")
 
     async def _fake_resolve_hf_file_url(**kwargs):
-        return {"source": "mirror", "url": f"https://hf.devneeds.ir/{kwargs['repo_id']}/resolve/{kwargs['revision']}/{kwargs['filename']}"}
+        return {"source": "official", "url": f"https://huggingface.co/{kwargs['repo_id']}/resolve/{kwargs['revision']}/{kwargs['filename']}"}
 
     mgr.fetch_remote_repo_files = _fake_fetch_remote_repo_files  # type: ignore[assignment]
     mgr.resolve_hf_file_url = _fake_resolve_hf_file_url  # type: ignore[assignment]
@@ -145,7 +128,6 @@ def test_create_local_model_jobs_fallback_when_remote_unreachable() -> None:
             preset_name=None,
             repo_id="Systran/faster-whisper-small",
             revision="main",
-            use_mirror=True,
             output_subdir="x",
             files=None,
         )

@@ -8,7 +8,7 @@ Features:
 - Local transcription backend (`faster-whisper`)
 - API-based transcription backends (OpenAI-compatible: OpenAI / Groq / Custom)
 - Model download job system (create/list/status/cancel)
-- Hugging Face URL builder with mirror support (including `https://hf.devneeds.ir`)
+- Hugging Face API integration for model discovery and downloads
 - Fully configurable via `config.yml` + `.env`
 - Modern built-in web UI dashboard at `/` (upload, settings, model management, download jobs)
 - Swagger/OpenAPI docs and test suite
@@ -122,7 +122,6 @@ or
 - `GET /admin/models/remote/repos`
 - `GET /admin/models/remote/files`
 - `POST /admin/models/local/download`
-- `GET /admin/mirrors`
 - `POST /admin/models/url/huggingface-file`
 - `POST /admin/downloads`
 - `GET /admin/downloads`
@@ -151,15 +150,36 @@ curl.exe -X POST http://127.0.0.1:8000/transcribe `
   -F "language=fa"
 ```
 
-## Hugging Face Mirror Notes
+## Manual Model Download (Recommended)
 
-To build direct model file URLs using mirror base:
-- Use `POST /admin/models/url/huggingface-file`
-- Set `use_mirror=true` in request body
-- Configure mirror via:
-  - `MIRRORS_HUGGINGFACE_MIRROR_BASE` (default: `https://hf.devneeds.ir`)
-  - `MIRRORS_PREFER_MIRROR`
-  - `MIRRORS_FALLBACK_TO_OFFICIAL`
+If you want to download models manually and use them in the app, place each model in its own directory under:
+
+- `runtime/models/<model-folder>/`
+
+Minimum required files for local `faster-whisper` usage:
+
+- `config.json`
+- `model.bin`
+- `tokenizer.json` (or `tokenizer_config.json`)
+- `vocabulary.json` or `vocabulary.txt`
+
+Example:
+
+```text
+runtime/models/faster-whisper-small/
+  config.json
+  model.bin
+  tokenizer.json
+  vocabulary.txt
+```
+
+After placing files:
+
+1. Restart the API service.
+2. Open `GET /admin/models/local` (or the UI models section) to verify detection.
+3. Set `provider=local` and `model` to either:
+   - absolute model path, or
+   - model alias (for example `small`, `medium`, `large-v3`) when mapped to a local folder.
 
 ## Tests
 

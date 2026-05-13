@@ -39,7 +39,6 @@ const els = {
   downloadRevision: $("downloadRevision"),
   downloadSubdir: $("downloadSubdir"),
   downloadFiles: $("downloadFiles"),
-  downloadUseMirror: $("downloadUseMirror"),
   remoteRepoFiles: $("remoteRepoFiles"),
   btnDownloadModel: $("btnDownloadModel"),
   downloadJobs: $("downloadJobs"),
@@ -559,7 +558,6 @@ async function downloadModelHandler() {
     preset_name: els.downloadPreset.value || null,
     repo_id: els.downloadRepo.value.trim() || null,
     revision: els.downloadRevision.value.trim() || "main",
-    use_mirror: els.downloadUseMirror.checked,
     output_subdir: els.downloadSubdir.value.trim() || null,
     files: files.length ? files : null,
   };

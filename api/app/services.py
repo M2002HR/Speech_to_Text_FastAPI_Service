@@ -909,15 +909,12 @@ class DownloadManager:
         if self.settings.downloads.allowed_domains and domain not in self.settings.downloads.allowed_domains:
             raise HTTPException(status_code=403, detail=f"domain '{domain}' is not in DOWNLOADS_ALLOWED_DOMAINS")
 
-    def build_hf_file_url(self, repo_id: str, filename: str, revision: str = "main", use_mirror: Optional[bool] = None) -> Dict[str, str]:
-        use_mirror_final = self.settings.mirrors.prefer_mirror if use_mirror is None else use_mirror
-        base = self.settings.mirrors.huggingface_mirror_base if use_mirror_final else self.settings.mirrors.huggingface_base
-        source = "mirror" if use_mirror_final else "official"
-
+    def build_hf_file_url(self, repo_id: str, filename: str, revision: str = "main") -> Dict[str, str]:
+        base = self.settings.mirrors.huggingface_base
         repo_clean = repo_id.strip("/")
         file_clean = filename.strip("/")
         url = join_url(base, f"{repo_clean}/resolve/{revision}/{file_clean}")
-        return {"source": source, "url": url}
+        return {"source": "official", "url": url}
 
     async def probe_url(self, url: str) -> bool:
         try:
@@ -953,25 +950,9 @@ class DownloadManager:
         repo_id: str,
         filename: str,
         revision: str = "main",
-        use_mirror: Optional[bool] = None,
     ) -> Dict[str, str]:
-        primary = self.build_hf_file_url(repo_id=repo_id, filename=filename, revision=revision, use_mirror=use_mirror)
+        primary = self.build_hf_file_url(repo_id=repo_id, filename=filename, revision=revision)
         self._assert_domain_allowed(primary["url"])
-
-        if primary["source"] == "mirror":
-            exists = await self._url_exists(primary["url"])
-            if exists is True:
-                return primary
-            if exists is False and self.settings.mirrors.fallback_to_official:
-                fallback = self.build_hf_file_url(
-                    repo_id=repo_id,
-                    filename=filename,
-                    revision=revision,
-                    use_mirror=False,
-                )
-                self._assert_domain_allowed(fallback["url"])
-                return fallback
-
         return primary
 
     async def fetch_remote_repo_files(
@@ -1131,7 +1112,6 @@ class DownloadManager:
         preset_name: Optional[str],
         repo_id: Optional[str],
         revision: str,
-        use_mirror: Optional[bool],
         output_subdir: Optional[str],
         files: Optional[List[str]],
     ) -> List[DownloadJob]:
@@ -1174,7 +1154,6 @@ class DownloadManager:
                 repo_id=selected_repo,
                 filename=file_name,
                 revision=revision,
-                use_mirror=use_mirror,
             )
             job = await self.create_job(
                 source="huggingface_file",
@@ -1283,43 +1262,6 @@ class DownloadManager:
                 active_url = job.resolved_url
                 async with self.client.stream("GET", active_url, headers=headers, timeout=self.settings.downloads.timeout_sec, follow_redirects=True) as resp:
                     if resp.status_code >= 400:
-                        parsed = urlparse(active_url)
-                        mirror_host = urlparse(self.settings.mirrors.huggingface_mirror_base).hostname
-                        can_fallback = (
-                            self.settings.mirrors.fallback_to_official
-                            and mirror_host
-                            and parsed.hostname == mirror_host
-                        )
-                        if can_fallback:
-                            fallback_url = join_url(self.settings.mirrors.huggingface_base, parsed.path)
-                            job.resolved_url = fallback_url
-                            active_url = fallback_url
-                            async with self.client.stream("GET", active_url, headers=headers, timeout=self.settings.downloads.timeout_sec, follow_redirects=True) as resp2:
-                                if resp2.status_code >= 400:
-                                    raise RuntimeError(f"download failed with status={resp2.status_code}")
-                                content_length = resp2.headers.get("content-length")
-                                if content_length and str(content_length).isdigit():
-                                    total = int(content_length)
-                                    if resumed > 0 and resp2.status_code == 206:
-                                        total += resumed
-                                    job.bytes_total = total
-                                bytes_done = resumed
-                                with part_path.open(mode) as f:
-                                    async for chunk in resp2.aiter_bytes(chunk_size=self.settings.downloads.chunk_size):
-                                        if job.cancel_event.is_set():
-                                            job.status = "cancelled"
-                                            job.completed_at = now_utc()
-                                            return
-                                        if not chunk:
-                                            continue
-                                        f.write(chunk)
-                                        bytes_done += len(chunk)
-                                        job.bytes_downloaded = bytes_done
-                            os.replace(part_path, final_path)
-                            job.output_path = str(final_path)
-                            job.status = "completed"
-                            job.completed_at = now_utc()
-                            return
                         raise RuntimeError(f"download failed with status={resp.status_code}")
 
                     content_length = resp.headers.get("content-length")

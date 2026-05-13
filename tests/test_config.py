@@ -11,7 +11,7 @@ def test_default_settings() -> None:
     s = Settings()
     assert s.transcription.default_provider == "local"
     assert s.storage.max_upload_mb > 0
-    assert s.mirrors.huggingface_mirror_base.startswith("https://")
+    assert s.mirrors.huggingface_base.startswith("https://")
 
 
 def test_load_settings_env_override(tmp_path, monkeypatch) -> None:
@@ -37,7 +37,7 @@ def test_load_settings_env_override(tmp_path, monkeypatch) -> None:
     assert s.storage.max_upload_mb == 256
 
 
-def test_openai_enabled_requires_key(tmp_path) -> None:
+def test_openai_enabled_requires_key(tmp_path, monkeypatch) -> None:
     cfg = tmp_path / "cfg.yml"
     cfg.write_text(
         textwrap.dedent(
@@ -52,5 +52,6 @@ def test_openai_enabled_requires_key(tmp_path) -> None:
         encoding="utf-8",
     )
 
+    monkeypatch.setenv("PROVIDER_OPENAI_ENABLED", "true")
     with pytest.raises(ValueError, match="providers.openai"):
         load_settings(config_file=str(cfg))

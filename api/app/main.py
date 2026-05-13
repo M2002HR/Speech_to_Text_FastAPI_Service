@@ -24,7 +24,6 @@ from .schemas import (
     LocalModelPresetsResponse,
     RemoteModelFilesResponse,
     RemoteModelRepoListResponse,
-    MirrorInfoResponse,
     ModelUrlResponse,
     ProviderInfo,
     ProvidersResponse,
@@ -61,7 +60,7 @@ app = FastAPI(
     version=_RUNTIME_SETTINGS.app.version,
     description=(
         "Audio/Video to Text service with local and API backends, ffmpeg preprocessing, "
-        "and model download management (HuggingFace + mirror support)."
+        "and model download management via Hugging Face."
     ),
     docs_url=_RUNTIME_SETTINGS.app.docs_url if _DOCS_ENABLED else None,
     redoc_url=_RUNTIME_SETTINGS.app.redoc_url if _DOCS_ENABLED else None,
@@ -77,7 +76,7 @@ app = FastAPI(
         {"name": "transcription", "description": "Upload audio/video and get transcription."},
         {"name": "providers", "description": "Configured transcription providers."},
         {"name": "admin-system", "description": "Effective runtime config and system state."},
-        {"name": "admin-models", "description": "Local presets + mirror URL generation."},
+        {"name": "admin-models", "description": "Local presets + Hugging Face model tools."},
         {"name": "admin-downloads", "description": "Model download jobs management."},
     ],
 )
@@ -354,7 +353,7 @@ async def admin_remote_model_files(
     response_model=DownloadBatchResponse,
     tags=["admin-models"],
     dependencies=[Depends(_require_admin)],
-    summary="Download local model files from HuggingFace/devneeds mirror",
+    summary="Download local model files from HuggingFace",
 )
 async def admin_download_local_model(request: Request, payload: LocalModelDownloadRequest) -> Dict[str, Any]:
     downloads = request.app.state.services.transcription.downloads
@@ -362,37 +361,11 @@ async def admin_download_local_model(request: Request, payload: LocalModelDownlo
         preset_name=payload.preset_name,
         repo_id=payload.repo_id,
         revision=payload.revision,
-        use_mirror=payload.use_mirror,
         output_subdir=payload.output_subdir,
         files=payload.files,
     )
     items = [x.to_dict() for x in jobs]
     return {"total": len(items), "items": items}
-
-
-@app.get(
-    "/admin/mirrors",
-    response_model=MirrorInfoResponse,
-    tags=["admin-models"],
-    dependencies=[Depends(_require_admin)],
-    summary="Mirror configuration and reachability",
-)
-async def admin_mirrors(request: Request) -> Dict[str, Any]:
-    settings: Settings = request.app.state.settings
-    downloads = request.app.state.services.transcription.downloads
-
-    mirror_ok = await downloads.probe_url(settings.mirrors.huggingface_mirror_base)
-    official_ok = await downloads.probe_url(settings.mirrors.huggingface_base)
-
-    return {
-        "huggingface_base": settings.mirrors.huggingface_base,
-        "huggingface_mirror_base": settings.mirrors.huggingface_mirror_base,
-        "prefer_mirror": settings.mirrors.prefer_mirror,
-        "fallback_to_official": settings.mirrors.fallback_to_official,
-        "checked_at": now_utc(),
-        "mirror_reachable": mirror_ok,
-        "official_reachable": official_ok,
-    }
 
 
 @app.post(
@@ -408,7 +381,6 @@ async def admin_build_hf_file_url(request: Request, payload: HuggingFaceFileUrlR
         repo_id=payload.repo_id,
         filename=payload.filename,
         revision=payload.revision,
-        use_mirror=payload.use_mirror,
     )
     return out
 
@@ -435,7 +407,6 @@ async def admin_create_download(request: Request, payload: DownloadJobCreateRequ
             repo_id=payload.repo_id,
             filename=payload.filename,
             revision=payload.revision,
-            use_mirror=payload.use_mirror,
         )
         requested_url = f"hf://{payload.repo_id}@{payload.revision}/{payload.filename}"
         resolved_url = built["url"]

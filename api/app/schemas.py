@@ -95,25 +95,14 @@ class TranscriptionJobListResponse(BaseModel):
     items: List[TranscriptionJobResponse]
 
 
-class MirrorInfoResponse(BaseModel):
-    huggingface_base: str
-    huggingface_mirror_base: str
-    prefer_mirror: bool
-    fallback_to_official: bool
-    checked_at: datetime
-    mirror_reachable: Optional[bool] = None
-    official_reachable: Optional[bool] = None
-
-
 class HuggingFaceFileUrlRequest(BaseModel):
     repo_id: str = Field(..., examples=["openai/whisper-large-v3"])
     filename: str = Field(..., examples=["config.json"])
     revision: str = Field(default="main")
-    use_mirror: Optional[bool] = None
 
 
 class ModelUrlResponse(BaseModel):
-    source: Literal["mirror", "official"]
+    source: Literal["official"]
     url: str
 
 
@@ -123,7 +112,6 @@ class DownloadJobCreateRequest(BaseModel):
     repo_id: Optional[str] = None
     filename: Optional[str] = None
     revision: str = "main"
-    use_mirror: Optional[bool] = None
     output_subdir: str = "manual"
     output_filename: Optional[str] = None
 
@@ -198,7 +186,6 @@ class LocalModelDownloadRequest(BaseModel):
     preset_name: Optional[str] = None
     repo_id: Optional[str] = None
     revision: str = "main"
-    use_mirror: Optional[bool] = True
     output_subdir: Optional[str] = None
     files: Optional[List[str]] = None
 

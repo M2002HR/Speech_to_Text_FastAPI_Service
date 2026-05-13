@@ -84,9 +84,6 @@ providers:
 
 mirrors:
   huggingface_base: https://huggingface.co
-  huggingface_mirror_base: https://hf.devneeds.ir
-  prefer_mirror: true
-  fallback_to_official: true
 
 downloads:
   enabled: true
@@ -96,4 +93,3 @@ downloads:
   allow_resume: true
   allowed_domains:
     - huggingface.co
-    - hf.devneeds.ir

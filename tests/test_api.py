@@ -39,8 +39,8 @@ async def _fake_create_job(**kwargs):
 
 async def _fake_resolve_hf_file_url(**kwargs):
     return {
-        "source": "mirror",
-        "url": f"https://hf.devneeds.ir/{kwargs['repo_id']}/resolve/{kwargs['revision']}/{kwargs['filename']}",
+        "source": "official",
+        "url": f"https://huggingface.co/{kwargs['repo_id']}/resolve/{kwargs['revision']}/{kwargs['filename']}",
     }
 
 
@@ -55,7 +55,7 @@ async def _fake_create_local_model_jobs(**kwargs):
                 "status": "pending",
                 "source": "huggingface_file",
                 "requested_url": "hf://Systran/faster-whisper-small@main/config.json",
-                "resolved_url": "https://hf.devneeds.ir/Systran/faster-whisper-small/resolve/main/config.json",
+                "resolved_url": "https://huggingface.co/Systran/faster-whisper-small/resolve/main/config.json",
                 "created_at": "2026-01-01T00:00:00Z",
                 "started_at": None,
                 "completed_at": None,
@@ -164,7 +164,6 @@ def test_admin_download_create_with_hf_source(client_factory) -> None:
                 "repo_id": "openai/whisper-large-v3",
                 "filename": "config.json",
                 "revision": "main",
-                "use_mirror": True,
                 "output_subdir": "whisper",
             },
         )
@@ -172,7 +171,7 @@ def test_admin_download_create_with_hf_source(client_factory) -> None:
         assert resp.status_code == 200
         body = resp.json()
         assert body["job_id"] == "job123"
-        assert "hf.devneeds.ir" in body["resolved_url"]
+        assert "huggingface.co" in body["resolved_url"]
 
 
 def test_admin_auth_required(client_factory) -> None:
@@ -209,7 +208,6 @@ def test_admin_local_models_and_batch_download(client_factory) -> None:
             json={
                 "preset_name": "faster-whisper-small",
                 "revision": "main",
-                "use_mirror": True,
                 "output_subdir": "faster-whisper-small",
             },
         )

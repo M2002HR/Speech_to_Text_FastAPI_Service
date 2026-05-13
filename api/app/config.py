@@ -106,9 +106,6 @@ class ProvidersSection(BaseModel):
 
 class MirrorsSection(BaseModel):
     huggingface_base: str = "https://huggingface.co"
-    huggingface_mirror_base: str = "https://hf.devneeds.ir"
-    prefer_mirror: bool = True
-    fallback_to_official: bool = True
 
 
 class DownloadsSection(BaseModel):
@@ -117,7 +114,7 @@ class DownloadsSection(BaseModel):
     chunk_size: int = 1024 * 1024
     timeout_sec: float = 1800.0
     allow_resume: bool = True
-    allowed_domains: List[str] = Field(default_factory=lambda: ["huggingface.co", "hf.devneeds.ir"])
+    allowed_domains: List[str] = Field(default_factory=lambda: ["huggingface.co"])
 
     @field_validator("allowed_domains", mode="before")
     @classmethod
@@ -286,9 +283,6 @@ def _apply_env_overrides(config_dict: Dict[str, Any]) -> Dict[str, Any]:
         "PROVIDER_CUSTOM_AUTH_SCHEME": ("providers.custom.auth_scheme", str),
 
         "MIRRORS_HUGGINGFACE_BASE": ("mirrors.huggingface_base", str),
-        "MIRRORS_HUGGINGFACE_MIRROR_BASE": ("mirrors.huggingface_mirror_base", str),
-        "MIRRORS_PREFER_MIRROR": ("mirrors.prefer_mirror", _parse_bool),
-        "MIRRORS_FALLBACK_TO_OFFICIAL": ("mirrors.fallback_to_official", _parse_bool),
 
         "DOWNLOADS_ENABLED": ("downloads.enabled", _parse_bool),
         "DOWNLOADS_MAX_CONCURRENT_JOBS": ("downloads.max_concurrent_jobs", int),
