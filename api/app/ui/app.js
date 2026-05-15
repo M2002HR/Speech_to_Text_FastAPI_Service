@@ -34,6 +34,11 @@ const els = {
   patienceInput: $("patienceInput"),
   promptInput: $("promptInput"),
   initialPromptInput: $("initialPromptInput"),
+  chunkingEnabledInput: $("chunkingEnabledInput"),
+  chunkMinutesInput: $("chunkMinutesInput"),
+  chunkOverlapMinutesInput: $("chunkOverlapMinutesInput"),
+  chunkMinDurationMinutesInput: $("chunkMinDurationMinutesInput"),
+  vocabularyBiasInput: $("vocabularyBiasInput"),
   conditionOnPreviousTextInput: $("conditionOnPreviousTextInput"),
   requestIdInput: $("requestIdInput"),
   repetitionPenaltyInput: $("repetitionPenaltyInput"),
@@ -97,6 +102,49 @@ const state = {
 };
 
 const CONFIG_PRESETS = {
+  "local-ultra-accuracy-fa-ethics": {
+    label: "Local · Ultra Accuracy (FA Ethics)",
+    patch: {
+      transcription: {
+        default_provider: "local",
+        default_language: "fa",
+        enable_word_timestamps: true,
+        enable_segment_timestamps: true,
+      },
+      local: {
+        model_id: "large-v3",
+        device: "cuda",
+        compute_type: "float32",
+        beam_size: 10,
+        best_of: 10,
+        patience: 1.3,
+        temperature: 0.0,
+        vad_filter: true,
+        condition_on_previous_text: true,
+        repetition_penalty: 1.0,
+        no_repeat_ngram_size: 0,
+        compression_ratio_threshold: 2.4,
+        log_prob_threshold: -1.0,
+        no_speech_threshold: 0.6,
+        prompt_reset_on_temperature: 0.5,
+        hallucination_silence_threshold: null,
+        long_audio_chunking_enabled: true,
+        long_audio_chunk_minutes: 20,
+        long_audio_overlap_minutes: 10,
+        long_audio_min_duration_minutes: 20,
+        chunk_merge_similarity_threshold: 0.72,
+        chunk_merge_max_word_overlap: 48,
+        vocabulary_bias_enabled: true,
+        vocabulary_bias_text:
+          "اخلاق پژوهشی، اخلاق حرفه‌ای، توسعه پایدار علمی، کارگزاران علمی، آسیب‌های اخلاق پژوهشی، مهندسی برق و کنترل، ارزیابی، کاربردی، Applied Ethics، نظریه اخلاق، فرااخلاق، سرقت علمی، plagiarism، National Post، Ryerson، Electrical Engineering",
+      },
+      processing: {
+        always_extract_audio: true,
+        audio_sample_rate: 16000,
+        audio_channels: 1,
+      },
+    },
+  },
   "local-max-quality": {
     label: "Local · Max Quality",
     patch: {
@@ -214,6 +262,38 @@ const CONFIG_PRESETS = {
 };
 
 const TRANSCRIBE_PRESETS = {
+  "fa-ultra-accuracy-ethics": {
+    label: "FA · Ultra Accuracy (Ethics)",
+    values: {
+      provider: "local",
+      model: "large-v3",
+      language: "fa",
+      response_format: "verbose_json",
+      temperature: "0",
+      beam_size: "10",
+      best_of: "10",
+      patience: "1.3",
+      prompt: "",
+      initial_prompt: "",
+      chunking_enabled: true,
+      chunk_minutes: "20",
+      chunk_overlap_minutes: "10",
+      chunk_min_duration_minutes: "20",
+      vocabulary_bias:
+        "اخلاق پژوهشی، اخلاق حرفه‌ای، توسعه پایدار علمی، کارگزاران علمی، آسیب‌های اخلاق پژوهشی، مهندسی برق و کنترل، ارزیابی، کاربردی، Applied Ethics، فرااخلاق، سرقت علمی، plagiarism، National Post، Ryerson، Electrical Engineering",
+      word_timestamps: true,
+      segment_timestamps: true,
+      vad_filter: true,
+      condition_on_previous_text: true,
+      repetition_penalty: "1.0",
+      no_repeat_ngram_size: "0",
+      compression_ratio_threshold: "2.4",
+      log_prob_threshold: "-1.0",
+      no_speech_threshold: "0.6",
+      prompt_reset_on_temperature: "0.5",
+      hallucination_silence_threshold: "",
+    },
+  },
   "fa-max-quality": {
     label: "FA · Max Quality",
     values: {
@@ -650,6 +730,11 @@ function applyTranscribePreset(name) {
   els.patienceInput.value = v.patience;
   els.promptInput.value = v.prompt;
   els.initialPromptInput.value = v.initial_prompt;
+  els.chunkingEnabledInput.checked = Boolean(v.chunking_enabled);
+  els.chunkMinutesInput.value = v.chunk_minutes || "";
+  els.chunkOverlapMinutesInput.value = v.chunk_overlap_minutes || "";
+  els.chunkMinDurationMinutesInput.value = v.chunk_min_duration_minutes || "";
+  els.vocabularyBiasInput.value = v.vocabulary_bias || "";
   els.repetitionPenaltyInput.value = v.repetition_penalty || "";
   els.noRepeatNgramSizeInput.value = v.no_repeat_ngram_size || "";
   els.maxNewTokensInput.value = v.max_new_tokens || "";
@@ -1052,6 +1137,10 @@ async function transcribeHandler(event) {
   appendIf("best_of", els.bestOfInput.value);
   appendIf("patience", els.patienceInput.value);
   appendIf("initial_prompt", els.initialPromptInput.value);
+  appendIf("chunk_minutes", els.chunkMinutesInput.value);
+  appendIf("chunk_overlap_minutes", els.chunkOverlapMinutesInput.value);
+  appendIf("chunk_min_duration_minutes", els.chunkMinDurationMinutesInput.value);
+  appendIf("vocabulary_bias", els.vocabularyBiasInput.value);
   appendIf("repetition_penalty", els.repetitionPenaltyInput.value);
   appendIf("no_repeat_ngram_size", els.noRepeatNgramSizeInput.value);
   appendIf("max_new_tokens", els.maxNewTokensInput.value);
@@ -1070,6 +1159,7 @@ async function transcribeHandler(event) {
   form.append("segment_timestamps", String(els.segmentTimestampsInput.checked));
   form.append("vad_filter", String(els.vadFilterInput.checked));
   form.append("condition_on_previous_text", String(els.conditionOnPreviousTextInput.checked));
+  form.append("chunking_enabled", String(els.chunkingEnabledInput.checked));
 
   const requestId = (els.requestIdInput.value || "").trim();
 
