@@ -2,7 +2,12 @@
 
 from typing import Any, Dict
 
-from api.app.services import _detect_tail_loop, _trim_detected_tail_loop
+from api.app.services import (
+    _build_overlapping_windows,
+    _detect_tail_loop,
+    _trim_detected_tail_loop,
+    _word_overlap_suffix_prefix,
+)
 
 
 async def _fake_transcribe_upload(file, options):
@@ -284,3 +289,24 @@ def test_tail_loop_guard_ignores_short_repetition() -> None:
     text = "این یک تست است و در پایان فقط فقط فقط"
     info = _detect_tail_loop(text)
     assert info is None
+
+
+def test_chunk_window_builder_20_10_minutes() -> None:
+    windows = _build_overlapping_windows(
+        duration_seconds=3600.0,
+        window_minutes=20.0,
+        overlap_minutes=10.0,
+    )
+    assert len(windows) >= 5
+    assert windows[0]["start"] == 0.0
+    assert windows[0]["end"] == 1200.0
+    assert windows[1]["start"] == 600.0
+    assert windows[1]["end"] == 1800.0
+    assert windows[-1]["end"] == 3600.0
+
+
+def test_word_overlap_suffix_prefix() -> None:
+    left = ["الف", "ب", "ج", "د", "ه"]
+    right = ["د", "ه", "و", "ز"]
+    overlap = _word_overlap_suffix_prefix(left, right, max_words=8)
+    assert overlap == 2

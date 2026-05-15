@@ -2,6 +2,7 @@
 
 import asyncio
 import ctypes
+import difflib
 import json
 import mimetypes
 import os
@@ -431,6 +432,57 @@ def _trim_detected_tail_loop(text: str, loop_info: Dict[str, Any]) -> str:
     return trimmed or text.strip()
 
 
+def _normalize_merge_token(token: str) -> str:
+    return _normalize_loop_token(token)
+
+
+def _split_words(text: str) -> List[str]:
+    return [w for w in str(text or "").split() if w.strip()]
+
+
+def _word_overlap_suffix_prefix(left: List[str], right: List[str], max_words: int) -> int:
+    if not left or not right:
+        return 0
+    max_k = min(len(left), len(right), max(1, max_words))
+    for k in range(max_k, 0, -1):
+        if left[-k:] == right[:k]:
+            return k
+    return 0
+
+
+def _text_similarity(a: str, b: str) -> float:
+    a_norm = " ".join(_normalize_merge_token(x) for x in _split_words(a) if _normalize_merge_token(x))
+    b_norm = " ".join(_normalize_merge_token(x) for x in _split_words(b) if _normalize_merge_token(x))
+    if not a_norm or not b_norm:
+        return 0.0
+    return float(difflib.SequenceMatcher(None, a_norm, b_norm).ratio())
+
+
+def _build_overlapping_windows(
+    duration_seconds: float,
+    window_minutes: float,
+    overlap_minutes: float,
+) -> List[Dict[str, float]]:
+    duration = max(0.0, float(duration_seconds))
+    window = max(1.0, float(window_minutes) * 60.0)
+    overlap = max(0.0, float(overlap_minutes) * 60.0)
+    if overlap >= window:
+        overlap = max(0.0, window - 1.0)
+    step = max(1.0, window - overlap)
+
+    windows: List[Dict[str, float]] = []
+    start = 0.0
+    idx = 0
+    while start < duration:
+        end = min(duration, start + window)
+        windows.append({"index": idx, "start": round(start, 3), "end": round(end, 3)})
+        idx += 1
+        if end >= duration:
+            break
+        start += step
+    return windows
+
+
 class MediaService:
     def __init__(self, settings: Settings) -> None:
         self.settings = settings
@@ -498,6 +550,49 @@ class MediaService:
         )
         if result.returncode != 0:
             raise HTTPException(status_code=500, detail=f"ffmpeg extract failed: {result.stderr[:500]}")
+
+        return out_path
+
+    async def extract_audio_window(self, input_path: Path, start_sec: float, end_sec: float) -> Path:
+        if not self.ffmpeg_available():
+            raise HTTPException(
+                status_code=500,
+                detail=f"ffmpeg binary not found: {self.settings.processing.ffmpeg_binary}",
+            )
+
+        start = max(0.0, float(start_sec))
+        end = max(start, float(end_sec))
+        duration = max(0.01, end - start)
+        out_ext = self.settings.processing.extracted_audio_format.strip(".")
+        out_path = Path(self.settings.storage.output_dir) / f"{uuid.uuid4().hex}.{out_ext}"
+
+        cmd = [
+            self.settings.processing.ffmpeg_binary,
+            "-y",
+            "-ss",
+            f"{start:.3f}",
+            "-i",
+            str(input_path),
+            "-t",
+            f"{duration:.3f}",
+            "-vn",
+            "-acodec",
+            self.settings.processing.audio_codec,
+            "-ar",
+            str(self.settings.processing.audio_sample_rate),
+            "-ac",
+            str(self.settings.processing.audio_channels),
+            str(out_path),
+        ]
+        result = await asyncio.to_thread(
+            subprocess.run,
+            cmd,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if result.returncode != 0:
+            raise HTTPException(status_code=500, detail=f"ffmpeg chunk extract failed: {result.stderr[:500]}")
 
         return out_path
 
@@ -1643,6 +1738,441 @@ class TranscriptionService:
         if stage:
             job.stage = stage
 
+    def _resolve_chunking_runtime(self, options: Dict[str, Any], duration_seconds: Optional[float]) -> Dict[str, Any]:
+        enabled_raw = options.get("chunking_enabled")
+        chunk_minutes_raw = options.get("chunk_minutes")
+        overlap_minutes_raw = options.get("chunk_overlap_minutes")
+        min_duration_raw = options.get("chunk_min_duration_minutes")
+
+        enabled = (
+            self.settings.local.long_audio_chunking_enabled
+            if enabled_raw is None
+            else bool(enabled_raw)
+        )
+        chunk_minutes = (
+            self.settings.local.long_audio_chunk_minutes
+            if chunk_minutes_raw is None
+            else float(chunk_minutes_raw)
+        )
+        overlap_minutes = (
+            self.settings.local.long_audio_overlap_minutes
+            if overlap_minutes_raw is None
+            else float(overlap_minutes_raw)
+        )
+        min_duration_minutes = (
+            self.settings.local.long_audio_min_duration_minutes
+            if min_duration_raw is None
+            else float(min_duration_raw)
+        )
+
+        chunk_minutes = max(0.1, float(chunk_minutes))
+        overlap_minutes = max(0.0, float(overlap_minutes))
+        if overlap_minutes >= chunk_minutes:
+            overlap_minutes = max(0.0, chunk_minutes - 0.01)
+        min_duration_minutes = max(0.1, float(min_duration_minutes))
+
+        duration = float(duration_seconds) if duration_seconds is not None else None
+        should_chunk = bool(
+            enabled
+            and duration is not None
+            and duration >= (min_duration_minutes * 60.0)
+            and duration > (chunk_minutes * 60.0)
+            and chunk_minutes > overlap_minutes
+        )
+
+        return {
+            "enabled": enabled,
+            "should_chunk": should_chunk,
+            "chunk_minutes": chunk_minutes,
+            "overlap_minutes": overlap_minutes,
+            "min_duration_minutes": min_duration_minutes,
+            "duration_seconds": duration,
+        }
+
+    def _build_vocabulary_bias_text(self, options: Dict[str, Any]) -> Optional[str]:
+        pieces: List[str] = []
+        if self.settings.local.vocabulary_bias_enabled and self.settings.local.vocabulary_bias_text:
+            pieces.append(str(self.settings.local.vocabulary_bias_text))
+        if options.get("vocabulary_bias"):
+            pieces.append(str(options["vocabulary_bias"]))
+
+        if not pieces:
+            return None
+
+        raw_terms: List[str] = []
+        for item in pieces:
+            for term in re.split(r"[,;\n|،؛]+", item):
+                cleaned = term.strip()
+                if cleaned:
+                    raw_terms.append(cleaned)
+
+        unique_terms: List[str] = []
+        seen: set[str] = set()
+        for term in raw_terms:
+            key = _normalize_merge_token(term)
+            if not key or key in seen:
+                continue
+            seen.add(key)
+            unique_terms.append(term)
+
+        if not unique_terms:
+            return None
+        return "، ".join(unique_terms)
+
+    def _apply_vocabulary_bias(self, options: Dict[str, Any], bias_text: Optional[str]) -> Dict[str, Any]:
+        out = dict(options)
+        if not bias_text:
+            return out
+
+        prefix = f"واژگان کلیدی و اصطلاحات تخصصی این فایل: {bias_text}"
+        existing = str(out.get("prompt") or out.get("initial_prompt") or "").strip()
+        out["prompt"] = f"{existing}\n{prefix}".strip() if existing else prefix
+        return out
+
+    def _merge_chunk_outputs(
+        self,
+        *,
+        chunk_runs: List[Dict[str, Any]],
+        segment_timestamps: bool,
+        word_timestamps: bool,
+        similarity_threshold: float,
+        max_word_overlap: int,
+    ) -> Dict[str, Any]:
+        candidates: List[Dict[str, Any]] = []
+        all_words: List[Dict[str, Any]] = []
+        language: Optional[str] = None
+        duration_seconds: Optional[float] = None
+
+        for run in chunk_runs:
+            offset = float(run["start"])
+            output = run["output"]
+            if language is None and output.get("language"):
+                language = output.get("language")
+            if duration_seconds is None and output.get("duration_seconds") is not None:
+                duration_seconds = float(output["duration_seconds"])
+
+            segs = output.get("segments") if isinstance(output.get("segments"), list) else []
+            if not segs:
+                text_fallback = str(output.get("text") or "").strip()
+                if text_fallback:
+                    segs = [{
+                        "id": 0,
+                        "start": 0.0,
+                        "end": max(0.0, float(run["end"]) - float(run["start"])),
+                        "text": text_fallback,
+                        "avg_logprob": None,
+                        "no_speech_prob": None,
+                        "words": [],
+                    }]
+
+            for seg in segs:
+                text_seg = str(seg.get("text") or "").strip()
+                if not text_seg:
+                    continue
+                start = offset + float(seg.get("start", 0.0))
+                end = offset + float(seg.get("end", seg.get("start", 0.0)))
+                if end < start:
+                    end = start
+                candidates.append(
+                    {
+                        "start": start,
+                        "end": end,
+                        "text": text_seg,
+                        "avg_logprob": seg.get("avg_logprob"),
+                        "no_speech_prob": seg.get("no_speech_prob"),
+                        "words": seg.get("words") if isinstance(seg.get("words"), list) else [],
+                    }
+                )
+
+                if word_timestamps:
+                    for w in (seg.get("words") if isinstance(seg.get("words"), list) else []):
+                        ws = offset + float(w.get("start", 0.0))
+                        we = offset + float(w.get("end", w.get("start", 0.0)))
+                        all_words.append(
+                            {
+                                "start": ws,
+                                "end": max(ws, we),
+                                "word": str(w.get("word") or ""),
+                                "probability": w.get("probability"),
+                            }
+                        )
+
+        candidates.sort(key=lambda x: (x["start"], x["end"]))
+
+        merged_segments: List[Dict[str, Any]] = []
+        merged_text_tokens: List[str] = []
+        duplicate_count = 0
+        dedupe_trimmed_words = 0
+
+        for item in candidates:
+            score = float(item["avg_logprob"]) if isinstance(item.get("avg_logprob"), (int, float)) else -10.0
+            if merged_segments:
+                prev = merged_segments[-1]
+                overlap = max(0.0, min(prev["end"], item["end"]) - max(prev["start"], item["start"]))
+                prev_duration = max(0.001, float(prev["end"]) - float(prev["start"]))
+                item_duration = max(0.001, float(item["end"]) - float(item["start"]))
+                overlap_ratio = overlap / min(prev_duration, item_duration)
+                sim = _text_similarity(prev["text"], item["text"])
+
+                if overlap > 0 and overlap_ratio >= 0.45 and sim >= similarity_threshold:
+                    duplicate_count += 1
+                    prev_score = (
+                        float(prev["avg_logprob"])
+                        if isinstance(prev.get("avg_logprob"), (int, float))
+                        else -10.0
+                    )
+                    if score > prev_score:
+                        merged_segments[-1] = dict(item)
+                    continue
+
+            current_tokens = _split_words(item["text"])
+            current_norm = [_normalize_merge_token(x) for x in current_tokens]
+            merged_norm = [_normalize_merge_token(x) for x in merged_text_tokens]
+            overlap_words = _word_overlap_suffix_prefix(merged_norm, current_norm, max_word_overlap)
+            if overlap_words > 0:
+                dedupe_trimmed_words += overlap_words
+                current_tokens = current_tokens[overlap_words:]
+
+            if not current_tokens:
+                continue
+
+            clean_text = " ".join(current_tokens).strip()
+            if not clean_text:
+                continue
+
+            merged_text_tokens.extend(current_tokens)
+            new_seg = dict(item)
+            new_seg["text"] = clean_text
+            merged_segments.append(new_seg)
+
+        final_segments: List[Dict[str, Any]] = []
+        for idx, seg in enumerate(merged_segments):
+            final_seg = {
+                "id": idx,
+                "start": float(seg["start"]),
+                "end": float(seg["end"]),
+                "text": str(seg["text"]),
+                "avg_logprob": seg.get("avg_logprob"),
+                "no_speech_prob": seg.get("no_speech_prob"),
+            }
+            if word_timestamps:
+                final_seg["words"] = []
+            final_segments.append(final_seg)
+
+        merged_words: Optional[List[Dict[str, Any]]] = None
+        if word_timestamps:
+            all_words.sort(key=lambda x: (x["start"], x["end"]))
+            merged_words = []
+            for w in all_words:
+                text_w = str(w.get("word") or "").strip()
+                if not text_w:
+                    continue
+                if merged_words:
+                    prev = merged_words[-1]
+                    prev_word = _normalize_merge_token(str(prev.get("word") or ""))
+                    cur_word = _normalize_merge_token(text_w)
+                    overlap = max(0.0, min(float(prev["end"]), float(w["end"])) - max(float(prev["start"]), float(w["start"])))
+                    if cur_word and prev_word == cur_word and overlap > 0:
+                        continue
+                merged_words.append(w)
+
+        merged_plain_text = " ".join(merged_text_tokens).strip()
+        merged_segment_text = "\n".join(seg["text"] for seg in final_segments if str(seg.get("text") or "").strip()).strip()
+
+        return {
+            "text": merged_segment_text or merged_plain_text,
+            "language": language,
+            "duration_seconds": duration_seconds,
+            "segments": final_segments if segment_timestamps else None,
+            "words": merged_words if word_timestamps else None,
+            "merge_stats": {
+                "input_segments": len(candidates),
+                "output_segments": len(final_segments),
+                "dropped_duplicates": duplicate_count,
+                "dedupe_trimmed_words": dedupe_trimmed_words,
+            },
+        }
+
+    async def _transcribe_local_with_optional_chunking(
+        self,
+        *,
+        prepared_path: Path,
+        options: Dict[str, Any],
+        duration: Optional[float],
+        progress_cb: Optional[Callable[[float], None]] = None,
+    ) -> Dict[str, Any]:
+        chunking = self._resolve_chunking_runtime(options, duration)
+        bias_text = self._build_vocabulary_bias_text(options)
+        local_options = self._apply_vocabulary_bias(options, bias_text)
+
+        if not chunking["should_chunk"]:
+            out = await self.local.transcribe(
+                prepared_path,
+                local_options,
+                duration_hint=duration,
+                progress_cb=progress_cb,
+            )
+            out.setdefault("metadata", {}).setdefault(
+                "chunking",
+                {
+                    "enabled": bool(chunking["enabled"]),
+                    "used": False,
+                    "reason": "duration_or_settings_not_matched",
+                },
+            )
+            if bias_text:
+                out.setdefault("metadata", {})["vocabulary_bias"] = {
+                    "enabled": True,
+                    "terms": bias_text,
+                }
+            return out
+
+        window_minutes = float(chunking["chunk_minutes"])
+        overlap_minutes = float(chunking["overlap_minutes"])
+        windows = _build_overlapping_windows(
+            duration_seconds=float(chunking["duration_seconds"]),
+            window_minutes=window_minutes,
+            overlap_minutes=overlap_minutes,
+        )
+        if len(windows) <= 1:
+            out = await self.local.transcribe(prepared_path, local_options, duration_hint=duration, progress_cb=progress_cb)
+            out.setdefault("metadata", {}).setdefault(
+                "chunking",
+                {
+                    "enabled": True,
+                    "used": False,
+                    "reason": "single_window_after_planning",
+                },
+            )
+            if bias_text:
+                out.setdefault("metadata", {})["vocabulary_bias"] = {
+                    "enabled": True,
+                    "terms": bias_text,
+                }
+            return out
+
+        run_options = dict(local_options)
+        run_options["segment_timestamps"] = True
+        run_options["condition_on_previous_text"] = False
+
+        chunk_runs: List[Dict[str, Any]] = []
+        chunk_temp_paths: List[Path] = []
+        total_windows = len(windows)
+        try:
+            for idx, w in enumerate(windows):
+                if progress_cb:
+                    progress_cb(round((idx / max(1, total_windows)) * 100.0, 2))
+                chunk_path = await self.media.extract_audio_window(prepared_path, float(w["start"]), float(w["end"]))
+                chunk_temp_paths.append(chunk_path)
+                chunk_duration = max(0.0, float(w["end"]) - float(w["start"]))
+                chunk_out = await self.local.transcribe(
+                    chunk_path,
+                    run_options,
+                    duration_hint=chunk_duration,
+                    progress_cb=None,
+                )
+                chunk_runs.append(
+                    {
+                        "index": int(w["index"]),
+                        "start": float(w["start"]),
+                        "end": float(w["end"]),
+                        "output": chunk_out,
+                    }
+                )
+                if progress_cb:
+                    progress_cb(round(((idx + 1) / max(1, total_windows)) * 100.0, 2))
+
+            merged = self._merge_chunk_outputs(
+                chunk_runs=chunk_runs,
+                segment_timestamps=(
+                    self.settings.transcription.enable_segment_timestamps
+                    if options.get("segment_timestamps") is None
+                    else bool(options.get("segment_timestamps"))
+                ),
+                word_timestamps=(
+                    self.settings.transcription.enable_word_timestamps
+                    if options.get("word_timestamps") is None
+                    else bool(options.get("word_timestamps"))
+                ),
+                similarity_threshold=float(self.settings.local.chunk_merge_similarity_threshold),
+                max_word_overlap=int(self.settings.local.chunk_merge_max_word_overlap),
+            )
+
+            total_process_ms = 0.0
+            resolved_model: Optional[str] = None
+            execution_device: Optional[str] = None
+            for run in chunk_runs:
+                usage = run["output"].get("usage") or {}
+                if isinstance(usage.get("process_ms"), (int, float)):
+                    total_process_ms += float(usage["process_ms"])
+                md = run["output"].get("metadata") or {}
+                if resolved_model is None and md.get("resolved_model"):
+                    resolved_model = str(md["resolved_model"])
+                if execution_device is None and md.get("execution_device") is not None:
+                    execution_device = md.get("execution_device")
+
+            out: Dict[str, Any] = {
+                "text": merged["text"],
+                "language": merged["language"],
+                "duration_seconds": duration,
+                "segments": merged["segments"],
+                "words": merged["words"],
+                "usage": {
+                    "provider": "local",
+                    "model": resolved_model or str(options.get("model") or self.settings.local.model_id),
+                    "audio_seconds": duration,
+                    "process_ms": round(total_process_ms, 2),
+                },
+                "metadata": {
+                    "requested_model": str(options.get("model") or self.settings.local.model_id),
+                    "resolved_model": resolved_model,
+                    "execution_device": execution_device,
+                    "chunking": {
+                        "enabled": True,
+                        "used": True,
+                        "window_minutes": window_minutes,
+                        "overlap_minutes": overlap_minutes,
+                        "window_count": len(windows),
+                        "windows": windows,
+                        "merge_stats": merged["merge_stats"],
+                    },
+                    "local_decode_options": {
+                        "beam_size": run_options.get("beam_size"),
+                        "best_of": run_options.get("best_of"),
+                        "patience": run_options.get("patience"),
+                        "temperature": run_options.get("temperature"),
+                        "condition_on_previous_text": False,
+                        "prompt": run_options.get("prompt") or run_options.get("initial_prompt"),
+                        "repetition_penalty": run_options.get("repetition_penalty"),
+                        "no_repeat_ngram_size": run_options.get("no_repeat_ngram_size"),
+                    },
+                },
+            }
+
+            if bias_text:
+                out["metadata"]["vocabulary_bias"] = {
+                    "enabled": True,
+                    "terms": bias_text,
+                }
+
+            merged_tail_loop = _detect_tail_loop(out["text"])
+            if merged_tail_loop:
+                trimmed_text = _trim_detected_tail_loop(out["text"], merged_tail_loop)
+                tail_trim_applied = False
+                if trimmed_text and trimmed_text != out["text"]:
+                    out["text"] = trimmed_text
+                    tail_trim_applied = True
+                out["metadata"]["tail_loop_guard"] = {
+                    "detected_after_chunk_merge": merged_tail_loop,
+                    "tail_trim_applied": tail_trim_applied,
+                }
+
+            return out
+        finally:
+            for p in chunk_temp_paths:
+                if p.exists():
+                    p.unlink(missing_ok=True)
+
     async def _run_transcription_job(self, job: TranscriptionJob) -> None:
         async with self._job_sem:
             if job.cancel_event.is_set():
@@ -1665,10 +2195,10 @@ class TranscriptionService:
                 self._update_job_progress(job, 0, "loading-model")
 
                 if job.provider == "local":
-                    out = await self.local.transcribe(
-                        prepared_path,
-                        job.options,
-                        duration_hint=duration,
+                    out = await self._transcribe_local_with_optional_chunking(
+                        prepared_path=prepared_path,
+                        options=job.options,
+                        duration=duration,
                         progress_cb=lambda p: self._update_job_progress(job, p, "transcribing"),
                     )
                 else:
@@ -1725,7 +2255,12 @@ class TranscriptionService:
             duration = await self.media.probe_duration(prepared_path)
 
             if provider == "local":
-                out = await self.local.transcribe(prepared_path, options, duration_hint=duration)
+                out = await self._transcribe_local_with_optional_chunking(
+                    prepared_path=prepared_path,
+                    options=options,
+                    duration=duration,
+                    progress_cb=None,
+                )
             else:
                 out = await self.api.transcribe(provider, prepared_path, options)
 

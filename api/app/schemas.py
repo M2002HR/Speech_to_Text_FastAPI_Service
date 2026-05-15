@@ -56,6 +56,11 @@ class TranscribeOptions(BaseModel):
     vad_min_speech_duration_ms: Optional[int] = None
     vad_min_silence_duration_ms: Optional[int] = None
     vad_speech_pad_ms: Optional[int] = None
+    chunking_enabled: Optional[bool] = None
+    chunk_minutes: Optional[float] = None
+    chunk_overlap_minutes: Optional[float] = None
+    chunk_min_duration_minutes: Optional[float] = None
+    vocabulary_bias: Optional[str] = None
 
 
 class WordTimestamp(BaseModel):

@@ -227,6 +227,11 @@ async def transcribe(
     vad_min_speech_duration_ms: Optional[int] = Form(default=None),
     vad_min_silence_duration_ms: Optional[int] = Form(default=None),
     vad_speech_pad_ms: Optional[int] = Form(default=None),
+    chunking_enabled: Optional[bool] = Form(default=None),
+    chunk_minutes: Optional[float] = Form(default=None),
+    chunk_overlap_minutes: Optional[float] = Form(default=None),
+    chunk_min_duration_minutes: Optional[float] = Form(default=None),
+    vocabulary_bias: Optional[str] = Form(default=None),
     x_request_id: Optional[str] = Header(default=None),
 ) -> Dict[str, Any]:
     options: Dict[str, Any] = {
@@ -257,6 +262,11 @@ async def transcribe(
         "vad_min_speech_duration_ms": vad_min_speech_duration_ms,
         "vad_min_silence_duration_ms": vad_min_silence_duration_ms,
         "vad_speech_pad_ms": vad_speech_pad_ms,
+        "chunking_enabled": chunking_enabled,
+        "chunk_minutes": chunk_minutes,
+        "chunk_overlap_minutes": chunk_overlap_minutes,
+        "chunk_min_duration_minutes": chunk_min_duration_minutes,
+        "vocabulary_bias": vocabulary_bias,
         "request_id": x_request_id,
     }
 
@@ -301,6 +311,11 @@ async def transcribe_job_create(
     vad_min_speech_duration_ms: Optional[int] = Form(default=None),
     vad_min_silence_duration_ms: Optional[int] = Form(default=None),
     vad_speech_pad_ms: Optional[int] = Form(default=None),
+    chunking_enabled: Optional[bool] = Form(default=None),
+    chunk_minutes: Optional[float] = Form(default=None),
+    chunk_overlap_minutes: Optional[float] = Form(default=None),
+    chunk_min_duration_minutes: Optional[float] = Form(default=None),
+    vocabulary_bias: Optional[str] = Form(default=None),
     x_request_id: Optional[str] = Header(default=None),
 ) -> Dict[str, Any]:
     options: Dict[str, Any] = {
@@ -331,6 +346,11 @@ async def transcribe_job_create(
         "vad_min_speech_duration_ms": vad_min_speech_duration_ms,
         "vad_min_silence_duration_ms": vad_min_silence_duration_ms,
         "vad_speech_pad_ms": vad_speech_pad_ms,
+        "chunking_enabled": chunking_enabled,
+        "chunk_minutes": chunk_minutes,
+        "chunk_overlap_minutes": chunk_overlap_minutes,
+        "chunk_min_duration_minutes": chunk_min_duration_minutes,
+        "vocabulary_bias": vocabulary_bias,
         "request_id": x_request_id,
     }
     job = await request.app.state.services.transcription.create_transcription_job(file, options)
