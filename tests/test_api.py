@@ -2,6 +2,8 @@
 
 from typing import Any, Dict
 
+from api.app.services import _detect_tail_loop, _trim_detected_tail_loop
+
 
 async def _fake_transcribe_upload(file, options):
     return {
@@ -183,6 +185,33 @@ def test_admin_auth_required(client_factory) -> None:
         assert allowed.status_code == 200
 
 
+def test_admin_config_editable_roundtrip(client_factory, tmp_path) -> None:
+    cfg_path = tmp_path / "config.yml"
+    cfg_path.write_text("transcription:\n  default_provider: local\n", encoding="utf-8")
+
+    with client_factory({"APP_CONFIG_FILE": str(cfg_path)}) as client:
+        editable = client.get("/admin/system/config-editable")
+        assert editable.status_code == 200
+        body = editable.json()
+        assert body["config_path"] == str(cfg_path)
+        assert isinstance(body["effective_config"], dict)
+
+        updated_config = body["effective_config"]
+        updated_config["transcription"]["default_language"] = "fa"
+
+        saved = client.put(
+            "/admin/system/config-editable",
+            json={
+                "config": updated_config,
+                "persist_to_file": True,
+                "reload_runtime": True,
+            },
+        )
+        assert saved.status_code == 200
+        out = saved.json()
+        assert out["effective_config"]["transcription"]["default_language"] == "fa"
+
+
 def test_admin_local_models_and_batch_download(client_factory) -> None:
     with client_factory() as client:
         mgr = client.app.state.services.transcription.downloads
@@ -237,3 +266,21 @@ def test_admin_remote_models_endpoints(client_factory) -> None:
         files_resp = client.get("/admin/models/remote/files?repo_id=Systran/faster-whisper-tiny&revision=main")
         assert files_resp.status_code == 200
         assert files_resp.json()["recommended_files"] == ["config.json", "model.bin"]
+
+
+def test_tail_loop_guard_detects_and_trims_repeated_word() -> None:
+    text = "این بخش سالم است " + ("این " * 40)
+    info = _detect_tail_loop(text)
+    assert info is not None
+    assert info["kind"] == "single_token"
+    assert info["remove_tokens"] >= 30
+
+    trimmed = _trim_detected_tail_loop(text, info)
+    assert trimmed.endswith("این")
+    assert trimmed != text.strip()
+
+
+def test_tail_loop_guard_ignores_short_repetition() -> None:
+    text = "این یک تست است و در پایان فقط فقط فقط"
+    info = _detect_tail_loop(text)
+    assert info is None

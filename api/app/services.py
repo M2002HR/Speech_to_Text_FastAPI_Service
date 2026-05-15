@@ -5,6 +5,7 @@ import ctypes
 import json
 import mimetypes
 import os
+import re
 import shutil
 import subprocess
 import time
@@ -350,6 +351,86 @@ def fallback_faster_whisper_files(repo_id: str) -> List[str]:
     return base + ["vocabulary.json"]
 
 
+_LOOP_TOKEN_STRIP_CHARS = "\"'`.,!?;:()[]{}<>«»“”‘’،؛…ـ"
+_MIN_SINGLE_TOKEN_REPEAT = 20
+_MIN_PHRASE_REPEAT = 8
+_MAX_PHRASE_N = 4
+_MAX_TAIL_TOKENS = 320
+
+
+def _normalize_loop_token(token: str) -> str:
+    cleaned = token.strip(_LOOP_TOKEN_STRIP_CHARS)
+    cleaned = re.sub(r"[\u200c\u200d\u200e\u200f]", "", cleaned)
+    return cleaned.lower().strip()
+
+
+def _detect_tail_loop(text: str) -> Optional[Dict[str, Any]]:
+    tokens = [t for t in str(text or "").split() if t.strip()]
+    if len(tokens) < 24:
+        return None
+
+    norm_all = [_normalize_loop_token(t) for t in tokens]
+    tail_start = max(0, len(tokens) - _MAX_TAIL_TOKENS)
+    tail_tokens = tokens[tail_start:]
+    norm = norm_all[tail_start:]
+
+    best: Optional[Dict[str, Any]] = None
+
+    last = norm_all[-1] if norm_all else ""
+    if last:
+        run = 1
+        idx = len(norm_all) - 2
+        while idx >= 0 and norm_all[idx] == last:
+            run += 1
+            idx -= 1
+        if run >= _MIN_SINGLE_TOKEN_REPEAT:
+            best = {
+                "kind": "single_token",
+                "pattern_size": 1,
+                "repeats": run,
+                "remove_tokens": run - 1,
+                "pattern": [last],
+            }
+
+    max_phrase_n = min(_MAX_PHRASE_N, len(norm) // 2)
+    for n in range(2, max_phrase_n + 1):
+        pattern = norm[-n:]
+        if any(not item for item in pattern):
+            continue
+        repeats = 1
+        idx = len(norm) - (2 * n)
+        while idx >= 0 and norm[idx: idx + n] == pattern:
+            repeats += 1
+            idx -= n
+        if repeats >= _MIN_PHRASE_REPEAT:
+            candidate = {
+                "kind": "phrase",
+                "pattern_size": n,
+                "repeats": repeats,
+                "remove_tokens": (repeats - 1) * n,
+                "pattern": pattern,
+            }
+            if best is None or candidate["remove_tokens"] > best["remove_tokens"]:
+                best = candidate
+
+    if not best:
+        return None
+
+    best["tail_tokens"] = len(tail_tokens)
+    best["tail_start_index"] = tail_start
+    best["total_tokens"] = len(tokens)
+    return best
+
+
+def _trim_detected_tail_loop(text: str, loop_info: Dict[str, Any]) -> str:
+    tokens = [t for t in str(text or "").split() if t.strip()]
+    remove_count = int(loop_info.get("remove_tokens") or 0)
+    if remove_count <= 0 or remove_count >= len(tokens):
+        return text.strip()
+    trimmed = " ".join(tokens[:-remove_count]).strip()
+    return trimmed or text.strip()
+
+
 class MediaService:
     def __init__(self, settings: Settings) -> None:
         self.settings = settings
@@ -614,88 +695,283 @@ class LocalTranscriber:
         seg_ts_raw = options.get("segment_timestamps")
         vad_raw = options.get("vad_filter")
         temperature_raw = options.get("temperature")
+        beam_size_raw = options.get("beam_size")
+        best_of_raw = options.get("best_of")
+        patience_raw = options.get("patience")
+        condition_prev_raw = options.get("condition_on_previous_text")
+        initial_prompt_raw = options.get("initial_prompt")
+        repetition_penalty_raw = options.get("repetition_penalty")
+        no_repeat_ngram_size_raw = options.get("no_repeat_ngram_size")
+        compression_ratio_threshold_raw = options.get("compression_ratio_threshold")
+        log_prob_threshold_raw = options.get("log_prob_threshold")
+        no_speech_threshold_raw = options.get("no_speech_threshold")
+        prompt_reset_on_temperature_raw = options.get("prompt_reset_on_temperature")
+        hallucination_silence_threshold_raw = options.get("hallucination_silence_threshold")
+        max_new_tokens_raw = options.get("max_new_tokens")
+        vad_threshold_raw = options.get("vad_threshold")
+        vad_neg_threshold_raw = options.get("vad_neg_threshold")
+        vad_min_speech_duration_ms_raw = options.get("vad_min_speech_duration_ms")
+        vad_min_silence_duration_ms_raw = options.get("vad_min_silence_duration_ms")
+        vad_speech_pad_ms_raw = options.get("vad_speech_pad_ms")
 
         word_timestamps = self.settings.transcription.enable_word_timestamps if word_ts_raw is None else bool(word_ts_raw)
         segment_timestamps = self.settings.transcription.enable_segment_timestamps if seg_ts_raw is None else bool(seg_ts_raw)
         vad_filter = self.settings.local.vad_filter if vad_raw is None else bool(vad_raw)
         temperature = self.settings.local.temperature if temperature_raw is None else float(temperature_raw)
+        beam_size = self.settings.local.beam_size if beam_size_raw is None else int(beam_size_raw)
+        best_of = self.settings.local.best_of if best_of_raw is None else int(best_of_raw)
+        patience = self.settings.local.patience if patience_raw is None else float(patience_raw)
+        condition_on_previous_text = (
+            self.settings.local.condition_on_previous_text
+            if condition_prev_raw is None
+            else bool(condition_prev_raw)
+        )
+        repetition_penalty = (
+            self.settings.local.repetition_penalty
+            if repetition_penalty_raw is None
+            else float(repetition_penalty_raw)
+        )
+        no_repeat_ngram_size = (
+            self.settings.local.no_repeat_ngram_size
+            if no_repeat_ngram_size_raw is None
+            else int(no_repeat_ngram_size_raw)
+        )
+        compression_ratio_threshold = (
+            self.settings.local.compression_ratio_threshold
+            if compression_ratio_threshold_raw is None
+            else float(compression_ratio_threshold_raw)
+        )
+        log_prob_threshold = (
+            self.settings.local.log_prob_threshold
+            if log_prob_threshold_raw is None
+            else float(log_prob_threshold_raw)
+        )
+        no_speech_threshold = (
+            self.settings.local.no_speech_threshold
+            if no_speech_threshold_raw is None
+            else float(no_speech_threshold_raw)
+        )
+        prompt_reset_on_temperature = (
+            self.settings.local.prompt_reset_on_temperature
+            if prompt_reset_on_temperature_raw is None
+            else float(prompt_reset_on_temperature_raw)
+        )
+        hallucination_silence_threshold = (
+            self.settings.local.hallucination_silence_threshold
+            if hallucination_silence_threshold_raw is None
+            else float(hallucination_silence_threshold_raw)
+        )
+        max_new_tokens = (
+            self.settings.local.max_new_tokens
+            if max_new_tokens_raw is None
+            else int(max_new_tokens_raw)
+        )
+        initial_prompt = (
+            options.get("prompt")
+            if options.get("prompt") is not None
+            else (self.settings.local.initial_prompt if initial_prompt_raw is None else str(initial_prompt_raw))
+        )
+
+        vad_parameters: Dict[str, Any] = {}
+        vad_threshold = self.settings.local.vad_threshold if vad_threshold_raw is None else float(vad_threshold_raw)
+        vad_neg_threshold = self.settings.local.vad_neg_threshold if vad_neg_threshold_raw is None else float(vad_neg_threshold_raw)
+        vad_min_speech_duration_ms = (
+            self.settings.local.vad_min_speech_duration_ms
+            if vad_min_speech_duration_ms_raw is None
+            else int(vad_min_speech_duration_ms_raw)
+        )
+        vad_min_silence_duration_ms = (
+            self.settings.local.vad_min_silence_duration_ms
+            if vad_min_silence_duration_ms_raw is None
+            else int(vad_min_silence_duration_ms_raw)
+        )
+        vad_speech_pad_ms = (
+            self.settings.local.vad_speech_pad_ms
+            if vad_speech_pad_ms_raw is None
+            else int(vad_speech_pad_ms_raw)
+        )
+        if vad_threshold is not None:
+            vad_parameters["threshold"] = float(vad_threshold)
+        if vad_neg_threshold is not None:
+            vad_parameters["neg_threshold"] = float(vad_neg_threshold)
+        if vad_min_speech_duration_ms is not None:
+            vad_parameters["min_speech_duration_ms"] = int(vad_min_speech_duration_ms)
+        if vad_min_silence_duration_ms is not None:
+            vad_parameters["min_silence_duration_ms"] = int(vad_min_silence_duration_ms)
+        if vad_speech_pad_ms is not None:
+            vad_parameters["speech_pad_ms"] = int(vad_speech_pad_ms)
 
         kwargs = {
             "language": options.get("language") or self.settings.transcription.default_language,
-            "beam_size": self.settings.local.beam_size,
-            "best_of": self.settings.local.best_of,
-            "patience": self.settings.local.patience,
+            "beam_size": beam_size,
+            "best_of": best_of,
+            "patience": patience,
             "temperature": temperature,
-            "condition_on_previous_text": self.settings.local.condition_on_previous_text,
-            "initial_prompt": options.get("prompt") or self.settings.local.initial_prompt,
+            "condition_on_previous_text": condition_on_previous_text,
+            "repetition_penalty": repetition_penalty,
+            "no_repeat_ngram_size": no_repeat_ngram_size,
+            "compression_ratio_threshold": compression_ratio_threshold,
+            "log_prob_threshold": log_prob_threshold,
+            "no_speech_threshold": no_speech_threshold,
+            "prompt_reset_on_temperature": prompt_reset_on_temperature,
+            "initial_prompt": initial_prompt,
             "vad_filter": vad_filter,
             "word_timestamps": word_timestamps,
             "task": "transcribe",
         }
+        if max_new_tokens is not None and max_new_tokens > 0:
+            kwargs["max_new_tokens"] = max_new_tokens
+        if word_timestamps and hallucination_silence_threshold is not None:
+            kwargs["hallucination_silence_threshold"] = hallucination_silence_threshold
+        if vad_filter and vad_parameters:
+            kwargs["vad_parameters"] = vad_parameters
 
-        started = time.perf_counter()
-        segments_iter, info = await asyncio.to_thread(model.transcribe, str(audio_path), **kwargs)
-        info_duration = float(getattr(info, "duration", 0.0)) if getattr(info, "duration", None) is not None else None
-        duration_for_progress = info_duration if info_duration and info_duration > 0 else duration_hint
-        segments_raw = await asyncio.to_thread(
-            self._consume_segments_iter,
-            segments_iter,
-            duration_for_progress,
-            progress_cb,
-        )
-        process_ms = (time.perf_counter() - started) * 1000.0
+        async def _decode_once(decode_kwargs: Dict[str, Any]) -> Dict[str, Any]:
+            started = time.perf_counter()
+            segments_iter, info_obj = await asyncio.to_thread(model.transcribe, str(audio_path), **decode_kwargs)
+            info_duration = (
+                float(getattr(info_obj, "duration", 0.0))
+                if getattr(info_obj, "duration", None) is not None
+                else None
+            )
+            duration_for_progress = info_duration if info_duration and info_duration > 0 else duration_hint
+            segments_raw = await asyncio.to_thread(
+                self._consume_segments_iter,
+                segments_iter,
+                duration_for_progress,
+                progress_cb,
+            )
+            elapsed_ms = (time.perf_counter() - started) * 1000.0
 
-        text_parts: List[str] = []
-        segments: List[Dict[str, Any]] = []
-        words: List[Dict[str, Any]] = []
+            text_parts_local: List[str] = []
+            segments_local: List[Dict[str, Any]] = []
+            words_local: List[Dict[str, Any]] = []
 
-        for idx, seg in enumerate(segments_raw):
-            text_seg = (seg.text or "").strip()
-            if text_seg:
-                text_parts.append(text_seg)
+            for idx, seg in enumerate(segments_raw):
+                text_seg = (seg.text or "").strip()
+                if text_seg:
+                    text_parts_local.append(text_seg)
 
-            segment_obj: Dict[str, Any] = {
-                "id": int(getattr(seg, "id", idx)),
-                "start": float(seg.start),
-                "end": float(seg.end),
-                "text": text_seg,
-                "avg_logprob": float(getattr(seg, "avg_logprob", 0.0)) if getattr(seg, "avg_logprob", None) is not None else None,
-                "no_speech_prob": float(getattr(seg, "no_speech_prob", 0.0)) if getattr(seg, "no_speech_prob", None) is not None else None,
+                segment_obj: Dict[str, Any] = {
+                    "id": int(getattr(seg, "id", idx)),
+                    "start": float(seg.start),
+                    "end": float(seg.end),
+                    "text": text_seg,
+                    "avg_logprob": float(getattr(seg, "avg_logprob", 0.0)) if getattr(seg, "avg_logprob", None) is not None else None,
+                    "no_speech_prob": float(getattr(seg, "no_speech_prob", 0.0)) if getattr(seg, "no_speech_prob", None) is not None else None,
+                }
+
+                seg_words: List[Dict[str, Any]] = []
+                if word_timestamps and getattr(seg, "words", None):
+                    for w in seg.words:
+                        item = {
+                            "start": float(w.start),
+                            "end": float(w.end),
+                            "word": str(w.word),
+                            "probability": float(w.probability) if getattr(w, "probability", None) is not None else None,
+                        }
+                        seg_words.append(item)
+                        words_local.append(item)
+
+                if word_timestamps:
+                    segment_obj["words"] = seg_words
+
+                segments_local.append(segment_obj)
+
+            return {
+                "text": " ".join(text_parts_local).strip(),
+                "language": getattr(info_obj, "language", None),
+                "duration_seconds": info_duration,
+                "segments": segments_local if segment_timestamps else None,
+                "words": words_local if word_timestamps else None,
+                "process_ms": elapsed_ms,
             }
 
-            seg_words: List[Dict[str, Any]] = []
-            if word_timestamps and getattr(seg, "words", None):
-                for w in seg.words:
-                    item = {
-                        "start": float(w.start),
-                        "end": float(w.end),
-                        "word": str(w.word),
-                        "probability": float(w.probability) if getattr(w, "probability", None) is not None else None,
-                    }
-                    seg_words.append(item)
-                    words.append(item)
+        primary_output = await _decode_once(kwargs)
+        selected_output = primary_output
+        loop_before = _detect_tail_loop(primary_output["text"])
+        retry_used = False
+        retry_options: Optional[Dict[str, Any]] = None
+        loop_after = loop_before
 
-            if word_timestamps:
-                segment_obj["words"] = seg_words
+        if loop_before:
+            retry_options = dict(kwargs)
+            retry_options["condition_on_previous_text"] = False
+            retry_options["repetition_penalty"] = max(1.05, float(retry_options.get("repetition_penalty") or 1.0))
+            retry_options["no_repeat_ngram_size"] = max(3, int(retry_options.get("no_repeat_ngram_size") or 0))
+            retry_options.setdefault("max_new_tokens", 448)
 
-            segments.append(segment_obj)
+            current_temperature = retry_options.get("temperature")
+            if isinstance(current_temperature, (int, float)) and float(current_temperature) == 0.0:
+                retry_options["temperature"] = [0.0, 0.2, 0.4, 0.6]
+
+            if word_timestamps and retry_options.get("hallucination_silence_threshold") is None:
+                retry_options["hallucination_silence_threshold"] = 1.5
+
+            try:
+                retry_output = await _decode_once(retry_options)
+                retry_used = True
+                retry_loop = _detect_tail_loop(retry_output["text"])
+
+                if retry_loop is None or retry_loop.get("remove_tokens", 0) < loop_before.get("remove_tokens", 0):
+                    selected_output = retry_output
+                    loop_after = retry_loop
+                else:
+                    loop_after = loop_before
+            except Exception:
+                retry_used = False
+                loop_after = loop_before
+
+        tail_trim_applied = False
+        if loop_after:
+            trimmed_text = _trim_detected_tail_loop(selected_output["text"], loop_after)
+            if trimmed_text and trimmed_text != selected_output["text"]:
+                selected_output["text"] = trimmed_text
+                tail_trim_applied = True
 
         return {
-            "text": " ".join(text_parts).strip(),
-            "language": getattr(info, "language", None),
-            "duration_seconds": float(getattr(info, "duration", 0.0)) if getattr(info, "duration", None) is not None else None,
-            "segments": segments if segment_timestamps else None,
-            "words": words if word_timestamps else None,
+            "text": selected_output["text"],
+            "language": selected_output["language"],
+            "duration_seconds": selected_output["duration_seconds"],
+            "segments": selected_output["segments"],
+            "words": selected_output["words"],
             "usage": {
                 "provider": "local",
                 "model": resolved_model_id,
-                "audio_seconds": float(getattr(info, "duration", 0.0)) if getattr(info, "duration", None) is not None else None,
-                "process_ms": round(process_ms, 2),
+                "audio_seconds": selected_output["duration_seconds"],
+                "process_ms": round(float(selected_output["process_ms"]), 2),
             },
             "metadata": {
                 "requested_model": requested_model_id,
                 "resolved_model": resolved_model_id,
                 "execution_device": getattr(getattr(model, "model", None), "device", None),
+                "local_decode_options": {
+                    "beam_size": beam_size,
+                    "best_of": best_of,
+                    "patience": patience,
+                    "temperature": temperature,
+                    "condition_on_previous_text": condition_on_previous_text,
+                    "repetition_penalty": repetition_penalty,
+                    "no_repeat_ngram_size": no_repeat_ngram_size,
+                    "compression_ratio_threshold": compression_ratio_threshold,
+                    "log_prob_threshold": log_prob_threshold,
+                    "no_speech_threshold": no_speech_threshold,
+                    "prompt_reset_on_temperature": prompt_reset_on_temperature,
+                    "initial_prompt": initial_prompt,
+                    "vad_filter": vad_filter,
+                    "vad_parameters": vad_parameters or None,
+                    "hallucination_silence_threshold": (
+                        hallucination_silence_threshold if word_timestamps else None
+                    ),
+                    "max_new_tokens": max_new_tokens,
+                },
+                "tail_loop_guard": {
+                    "detected_before_retry": loop_before,
+                    "retry_used": retry_used,
+                    "retry_decode_options": retry_options,
+                    "detected_after_retry": loop_after,
+                    "tail_trim_applied": tail_trim_applied,
+                },
             },
         }
 
