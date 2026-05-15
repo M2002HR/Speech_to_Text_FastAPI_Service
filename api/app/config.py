@@ -87,6 +87,14 @@ class LocalSection(BaseModel):
     vad_min_speech_duration_ms: Optional[int] = None
     vad_min_silence_duration_ms: Optional[int] = None
     vad_speech_pad_ms: Optional[int] = None
+    long_audio_chunking_enabled: bool = False
+    long_audio_chunk_minutes: float = 20.0
+    long_audio_overlap_minutes: float = 10.0
+    long_audio_min_duration_minutes: float = 30.0
+    chunk_merge_similarity_threshold: float = 0.72
+    chunk_merge_max_word_overlap: int = 48
+    vocabulary_bias_enabled: bool = False
+    vocabulary_bias_text: Optional[str] = None
 
 
 class ProviderSection(BaseModel):
@@ -172,6 +180,18 @@ class Settings(BaseModel):
             raise ValueError("storage.max_upload_mb must be positive")
         if self.downloads.max_concurrent_jobs <= 0:
             raise ValueError("downloads.max_concurrent_jobs must be positive")
+        if self.local.long_audio_chunk_minutes <= 0:
+            raise ValueError("local.long_audio_chunk_minutes must be positive")
+        if self.local.long_audio_overlap_minutes < 0:
+            raise ValueError("local.long_audio_overlap_minutes must be >= 0")
+        if self.local.long_audio_overlap_minutes >= self.local.long_audio_chunk_minutes:
+            raise ValueError("local.long_audio_overlap_minutes must be smaller than local.long_audio_chunk_minutes")
+        if self.local.long_audio_min_duration_minutes <= 0:
+            raise ValueError("local.long_audio_min_duration_minutes must be positive")
+        if not (0.0 <= self.local.chunk_merge_similarity_threshold <= 1.0):
+            raise ValueError("local.chunk_merge_similarity_threshold must be between 0 and 1")
+        if self.local.chunk_merge_max_word_overlap <= 0:
+            raise ValueError("local.chunk_merge_max_word_overlap must be positive")
 
         return self
 
@@ -284,6 +304,14 @@ def _apply_env_overrides(config_dict: Dict[str, Any]) -> Dict[str, Any]:
         "LOCAL_VAD_MIN_SPEECH_DURATION_MS": ("local.vad_min_speech_duration_ms", int),
         "LOCAL_VAD_MIN_SILENCE_DURATION_MS": ("local.vad_min_silence_duration_ms", int),
         "LOCAL_VAD_SPEECH_PAD_MS": ("local.vad_speech_pad_ms", int),
+        "LOCAL_LONG_AUDIO_CHUNKING_ENABLED": ("local.long_audio_chunking_enabled", _parse_bool),
+        "LOCAL_LONG_AUDIO_CHUNK_MINUTES": ("local.long_audio_chunk_minutes", float),
+        "LOCAL_LONG_AUDIO_OVERLAP_MINUTES": ("local.long_audio_overlap_minutes", float),
+        "LOCAL_LONG_AUDIO_MIN_DURATION_MINUTES": ("local.long_audio_min_duration_minutes", float),
+        "LOCAL_CHUNK_MERGE_SIMILARITY_THRESHOLD": ("local.chunk_merge_similarity_threshold", float),
+        "LOCAL_CHUNK_MERGE_MAX_WORD_OVERLAP": ("local.chunk_merge_max_word_overlap", int),
+        "LOCAL_VOCABULARY_BIAS_ENABLED": ("local.vocabulary_bias_enabled", _parse_bool),
+        "LOCAL_VOCABULARY_BIAS_TEXT": ("local.vocabulary_bias_text", str),
 
         "PROVIDER_OPENAI_ENABLED": ("providers.openai.enabled", _parse_bool),
         "PROVIDER_OPENAI_BASE_URL": ("providers.openai.base_url", str),

@@ -69,6 +69,14 @@ local:
   vad_min_speech_duration_ms: null
   vad_min_silence_duration_ms: null
   vad_speech_pad_ms: null
+  long_audio_chunking_enabled: false
+  long_audio_chunk_minutes: 20.0
+  long_audio_overlap_minutes: 10.0
+  long_audio_min_duration_minutes: 30.0
+  chunk_merge_similarity_threshold: 0.72
+  chunk_merge_max_word_overlap: 48
+  vocabulary_bias_enabled: false
+  vocabulary_bias_text: null
 
 providers:
   openai:
