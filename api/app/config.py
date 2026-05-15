@@ -74,6 +74,19 @@ class LocalSection(BaseModel):
     temperature: float = 0.0
     condition_on_previous_text: bool = True
     initial_prompt: Optional[str] = None
+    repetition_penalty: float = 1.0
+    no_repeat_ngram_size: int = 0
+    compression_ratio_threshold: Optional[float] = 2.4
+    log_prob_threshold: Optional[float] = -1.0
+    no_speech_threshold: Optional[float] = 0.6
+    prompt_reset_on_temperature: float = 0.5
+    hallucination_silence_threshold: Optional[float] = None
+    max_new_tokens: Optional[int] = None
+    vad_threshold: Optional[float] = None
+    vad_neg_threshold: Optional[float] = None
+    vad_min_speech_duration_ms: Optional[int] = None
+    vad_min_silence_duration_ms: Optional[int] = None
+    vad_speech_pad_ms: Optional[int] = None
 
 
 class ProviderSection(BaseModel):
@@ -258,6 +271,19 @@ def _apply_env_overrides(config_dict: Dict[str, Any]) -> Dict[str, Any]:
         "LOCAL_TEMPERATURE": ("local.temperature", float),
         "LOCAL_CONDITION_ON_PREVIOUS_TEXT": ("local.condition_on_previous_text", _parse_bool),
         "LOCAL_INITIAL_PROMPT": ("local.initial_prompt", str),
+        "LOCAL_REPETITION_PENALTY": ("local.repetition_penalty", float),
+        "LOCAL_NO_REPEAT_NGRAM_SIZE": ("local.no_repeat_ngram_size", int),
+        "LOCAL_COMPRESSION_RATIO_THRESHOLD": ("local.compression_ratio_threshold", float),
+        "LOCAL_LOG_PROB_THRESHOLD": ("local.log_prob_threshold", float),
+        "LOCAL_NO_SPEECH_THRESHOLD": ("local.no_speech_threshold", float),
+        "LOCAL_PROMPT_RESET_ON_TEMPERATURE": ("local.prompt_reset_on_temperature", float),
+        "LOCAL_HALLUCINATION_SILENCE_THRESHOLD": ("local.hallucination_silence_threshold", float),
+        "LOCAL_MAX_NEW_TOKENS": ("local.max_new_tokens", int),
+        "LOCAL_VAD_THRESHOLD": ("local.vad_threshold", float),
+        "LOCAL_VAD_NEG_THRESHOLD": ("local.vad_neg_threshold", float),
+        "LOCAL_VAD_MIN_SPEECH_DURATION_MS": ("local.vad_min_speech_duration_ms", int),
+        "LOCAL_VAD_MIN_SILENCE_DURATION_MS": ("local.vad_min_silence_duration_ms", int),
+        "LOCAL_VAD_SPEECH_PAD_MS": ("local.vad_speech_pad_ms", int),
 
         "PROVIDER_OPENAI_ENABLED": ("providers.openai.enabled", _parse_bool),
         "PROVIDER_OPENAI_BASE_URL": ("providers.openai.base_url", str),

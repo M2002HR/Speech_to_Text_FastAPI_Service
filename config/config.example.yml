@@ -56,6 +56,19 @@ local:
   temperature: 0.0
   condition_on_previous_text: true
   initial_prompt: null
+  repetition_penalty: 1.0
+  no_repeat_ngram_size: 0
+  compression_ratio_threshold: 2.4
+  log_prob_threshold: -1.0
+  no_speech_threshold: 0.6
+  prompt_reset_on_temperature: 0.5
+  hallucination_silence_threshold: null
+  max_new_tokens: null
+  vad_threshold: null
+  vad_neg_threshold: null
+  vad_min_speech_duration_ms: null
+  vad_min_silence_duration_ms: null
+  vad_speech_pad_ms: null
 
 providers:
   openai:
