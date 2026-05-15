@@ -38,6 +38,24 @@ class TranscribeOptions(BaseModel):
     word_timestamps: Optional[bool] = None
     segment_timestamps: Optional[bool] = None
     vad_filter: Optional[bool] = None
+    beam_size: Optional[int] = None
+    best_of: Optional[int] = None
+    patience: Optional[float] = None
+    condition_on_previous_text: Optional[bool] = None
+    initial_prompt: Optional[str] = None
+    repetition_penalty: Optional[float] = None
+    no_repeat_ngram_size: Optional[int] = None
+    compression_ratio_threshold: Optional[float] = None
+    log_prob_threshold: Optional[float] = None
+    no_speech_threshold: Optional[float] = None
+    prompt_reset_on_temperature: Optional[float] = None
+    hallucination_silence_threshold: Optional[float] = None
+    max_new_tokens: Optional[int] = None
+    vad_threshold: Optional[float] = None
+    vad_neg_threshold: Optional[float] = None
+    vad_min_speech_duration_ms: Optional[int] = None
+    vad_min_silence_duration_ms: Optional[int] = None
+    vad_speech_pad_ms: Optional[int] = None
 
 
 class WordTimestamp(BaseModel):
@@ -227,3 +245,17 @@ class EffectiveConfigResponse(BaseModel):
     generated_at: datetime
     precedence: str
     config: Dict[str, Any]
+
+
+class EditableConfigResponse(BaseModel):
+    generated_at: datetime
+    config_path: str
+    file_config: Dict[str, Any]
+    effective_config: Dict[str, Any]
+    precedence: str
+
+
+class EditableConfigUpdateRequest(BaseModel):
+    config: Dict[str, Any]
+    persist_to_file: bool = True
+    reload_runtime: bool = True

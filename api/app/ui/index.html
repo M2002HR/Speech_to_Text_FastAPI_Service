@@ -7,7 +7,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;700;800&family=Vazirmatn:wght@400;500;700&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="/ui-assets/styles.css?v=20260512d" />
+  <link rel="stylesheet" href="/ui-assets/styles.css?v=20260515a" />
 </head>
 <body>
   <div class="bg-orb orb-a"></div>
@@ -64,8 +64,63 @@
 
     <section class="card stack-lg">
       <div class="card-title-row">
+        <h2>تنظیمات کامل سرویس</h2>
+        <div class="actions">
+          <button id="btnLoadConfig" class="btn ghost" type="button">بارگذاری از فایل</button>
+          <button id="btnUseEffectiveConfig" class="btn ghost" type="button">استفاده از Effective</button>
+          <button id="btnSaveConfig" class="btn primary" type="button">ذخیره و اعمال</button>
+        </div>
+      </div>
+      <div class="grid cols-3">
+        <label>
+          <span>Preset کانفیگ</span>
+          <select id="configPresetSelect">
+            <option value="">انتخاب preset</option>
+          </select>
+        </label>
+        <div class="inline-end">
+          <button id="btnApplyConfigPreset" class="btn ghost" type="button">اعمال preset</button>
+        </div>
+        <div></div>
+      </div>
+      <div class="grid cols-3">
+        <label>
+          <span>Config Path</span>
+          <input id="configPath" type="text" readonly />
+        </label>
+        <label class="toggle single">
+          <input id="configPersistFile" type="checkbox" checked />
+          <span>ذخیره در فایل</span>
+        </label>
+        <label class="toggle single">
+          <input id="configReloadRuntime" type="checkbox" checked />
+          <span>اعمال فوری (reload runtime)</span>
+        </label>
+      </div>
+      <p class="hint">اولویت نهایی همیشه `env > config.yml > defaults` است. اگر env ست باشد، ممکن است مقدار فایل override شود.</p>
+      <div id="configEditor" class="list"></div>
+      <label>
+        <span>JSON خام تنظیمات (ویرایش مستقیم)</span>
+        <textarea id="configRaw" rows="14" class="mono"></textarea>
+      </label>
+    </section>
+
+    <section class="card stack-lg">
+      <div class="card-title-row">
         <h2>شروع ترنسکریپت</h2>
         <span class="chip">فرم اصلی</span>
+      </div>
+      <div class="grid cols-3">
+        <label>
+          <span>Preset ترنسکریپت</span>
+          <select id="transcribePresetSelect">
+            <option value="">انتخاب preset</option>
+          </select>
+        </label>
+        <div class="inline-end">
+          <button id="btnApplyTranscribePreset" class="btn ghost" type="button">اعمال preset</button>
+        </div>
+        <div></div>
       </div>
       <form id="transcribeForm" class="stack-lg">
         <div class="grid cols-2">
@@ -117,6 +172,105 @@
           </div>
         </div>
 
+        <div class="grid cols-3">
+          <label>
+            <span>Beam Size (local)</span>
+            <input id="beamSizeInput" name="beam_size" type="number" min="1" step="1" placeholder="5" />
+          </label>
+          <label>
+            <span>Best Of (local)</span>
+            <input id="bestOfInput" name="best_of" type="number" min="1" step="1" placeholder="5" />
+          </label>
+          <label>
+            <span>Patience (local)</span>
+            <input id="patienceInput" name="patience" type="number" min="0" step="0.1" placeholder="1.0" />
+          </label>
+        </div>
+
+        <div class="grid cols-3">
+          <label>
+            <span>Initial Prompt (local)</span>
+            <input id="initialPromptInput" name="initial_prompt" placeholder="override initial prompt" />
+          </label>
+          <label class="toggle single">
+            <input id="conditionOnPreviousTextInput" name="condition_on_previous_text" type="checkbox" checked />
+            <span>Condition On Previous Text (local)</span>
+          </label>
+          <label>
+            <span>X-Request-Id (optional)</span>
+            <input id="requestIdInput" name="x_request_id" placeholder="trace id" />
+          </label>
+        </div>
+
+        <div class="grid cols-3">
+          <label>
+            <span>Repetition Penalty</span>
+            <input id="repetitionPenaltyInput" name="repetition_penalty" type="number" min="1" step="0.01" placeholder="1.0" />
+          </label>
+          <label>
+            <span>No Repeat Ngram Size</span>
+            <input id="noRepeatNgramSizeInput" name="no_repeat_ngram_size" type="number" min="0" step="1" placeholder="0" />
+          </label>
+          <label>
+            <span>Max New Tokens</span>
+            <input id="maxNewTokensInput" name="max_new_tokens" type="number" min="1" step="1" placeholder="optional" />
+          </label>
+        </div>
+
+        <div class="grid cols-3">
+          <label>
+            <span>Compression Ratio Threshold</span>
+            <input id="compressionRatioThresholdInput" name="compression_ratio_threshold" type="number" step="0.1" placeholder="2.4" />
+          </label>
+          <label>
+            <span>Log Prob Threshold</span>
+            <input id="logProbThresholdInput" name="log_prob_threshold" type="number" step="0.1" placeholder="-1.0" />
+          </label>
+          <label>
+            <span>No Speech Threshold</span>
+            <input id="noSpeechThresholdInput" name="no_speech_threshold" type="number" min="0" max="1" step="0.01" placeholder="0.6" />
+          </label>
+        </div>
+
+        <div class="grid cols-3">
+          <label>
+            <span>Prompt Reset On Temperature</span>
+            <input id="promptResetOnTemperatureInput" name="prompt_reset_on_temperature" type="number" min="0" step="0.1" placeholder="0.5" />
+          </label>
+          <label>
+            <span>Hallucination Silence Threshold</span>
+            <input id="hallucinationSilenceThresholdInput" name="hallucination_silence_threshold" type="number" min="0" step="0.1" placeholder="optional" />
+          </label>
+          <label>
+            <span>VAD Threshold</span>
+            <input id="vadThresholdInput" name="vad_threshold" type="number" min="0" max="1" step="0.01" placeholder="0.5 (optional)" />
+          </label>
+        </div>
+
+        <div class="grid cols-3">
+          <label>
+            <span>VAD Neg Threshold</span>
+            <input id="vadNegThresholdInput" name="vad_neg_threshold" type="number" min="0" max="1" step="0.01" placeholder="optional" />
+          </label>
+          <label>
+            <span>VAD Min Speech Duration (ms)</span>
+            <input id="vadMinSpeechDurationMsInput" name="vad_min_speech_duration_ms" type="number" min="0" step="1" placeholder="optional" />
+          </label>
+          <label>
+            <span>VAD Min Silence Duration (ms)</span>
+            <input id="vadMinSilenceDurationMsInput" name="vad_min_silence_duration_ms" type="number" min="0" step="1" placeholder="optional" />
+          </label>
+        </div>
+
+        <div class="grid cols-3">
+          <label>
+            <span>VAD Speech Pad (ms)</span>
+            <input id="vadSpeechPadMsInput" name="vad_speech_pad_ms" type="number" min="0" step="1" placeholder="optional" />
+          </label>
+          <div></div>
+          <div></div>
+        </div>
+
         <div class="actions">
           <button id="btnTranscribe" class="btn primary" type="submit">شروع پردازش</button>
           <span id="transcribeStatus" class="hint"></span>
@@ -135,7 +289,10 @@
     <section class="card stack-lg">
       <div class="card-title-row">
         <h2>نتیجه</h2>
-        <button id="btnCopyText" class="btn ghost">کپی متن</button>
+        <div class="actions">
+          <button id="btnCopyText" class="btn ghost">کپی متن</button>
+          <button id="btnDownloadResult" class="btn ghost" type="button">دانلود فایل</button>
+        </div>
       </div>
       <div id="transcribeResult" class="result">هنوز پردازشی انجام نشده است.</div>
     </section>
@@ -231,6 +388,6 @@
     </article>
   </template>
 
-  <script src="/ui-assets/app.js?v=20260512d" defer></script>
+  <script src="/ui-assets/app.js?v=20260515a" defer></script>
 </body>
 </html>

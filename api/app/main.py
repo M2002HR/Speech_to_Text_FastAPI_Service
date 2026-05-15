@@ -1,18 +1,22 @@
 ﻿from __future__ import annotations
 
+import os
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, Optional
 
+import yaml
 from fastapi import Depends, FastAPI, File, Form, Header, HTTPException, Request, Security, UploadFile
 from fastapi.responses import FileResponse
 from fastapi.security import APIKeyHeader
 from fastapi.staticfiles import StaticFiles
 
-from .config import Settings, get_settings
+from .config import Settings, get_settings, load_settings
 from .schemas import (
     DownloadBatchResponse,
+    EditableConfigResponse,
+    EditableConfigUpdateRequest,
     DownloadJobCreateRequest,
     DownloadJobResponse,
     DownloadListResponse,
@@ -100,6 +104,29 @@ def _redacted_config(settings: Settings) -> Dict[str, Any]:
     return data
 
 
+def _config_file_path() -> Path:
+    return Path(os.getenv("APP_CONFIG_FILE", "config/config.yml"))
+
+
+def _load_file_config(path: Path) -> Dict[str, Any]:
+    if not path.exists():
+        return {}
+    with path.open("r", encoding="utf-8") as f:
+        raw = yaml.safe_load(f) or {}
+    if not isinstance(raw, dict):
+        raise HTTPException(status_code=500, detail=f"config file is not a mapping: {path}")
+    return raw
+
+
+async def _apply_runtime_settings(request: Request, settings: Settings) -> None:
+    current_services: Optional[ServiceContainer] = getattr(request.app.state, "services", None)
+    new_services = ServiceContainer(settings=settings)
+    request.app.state.settings = settings
+    request.app.state.services = new_services
+    if current_services is not None:
+        await current_services.close()
+
+
 async def _require_admin(request: Request, admin_token: Optional[str] = Security(_ADMIN_API_KEY)) -> None:
     settings: Settings = request.app.state.settings
     if not settings.admin.enabled:
@@ -182,6 +209,24 @@ async def transcribe(
     word_timestamps: Optional[bool] = Form(default=None),
     segment_timestamps: Optional[bool] = Form(default=None),
     vad_filter: Optional[bool] = Form(default=None),
+    beam_size: Optional[int] = Form(default=None),
+    best_of: Optional[int] = Form(default=None),
+    patience: Optional[float] = Form(default=None),
+    condition_on_previous_text: Optional[bool] = Form(default=None),
+    initial_prompt: Optional[str] = Form(default=None),
+    repetition_penalty: Optional[float] = Form(default=None),
+    no_repeat_ngram_size: Optional[int] = Form(default=None),
+    compression_ratio_threshold: Optional[float] = Form(default=None),
+    log_prob_threshold: Optional[float] = Form(default=None),
+    no_speech_threshold: Optional[float] = Form(default=None),
+    prompt_reset_on_temperature: Optional[float] = Form(default=None),
+    hallucination_silence_threshold: Optional[float] = Form(default=None),
+    max_new_tokens: Optional[int] = Form(default=None),
+    vad_threshold: Optional[float] = Form(default=None),
+    vad_neg_threshold: Optional[float] = Form(default=None),
+    vad_min_speech_duration_ms: Optional[int] = Form(default=None),
+    vad_min_silence_duration_ms: Optional[int] = Form(default=None),
+    vad_speech_pad_ms: Optional[int] = Form(default=None),
     x_request_id: Optional[str] = Header(default=None),
 ) -> Dict[str, Any]:
     options: Dict[str, Any] = {
@@ -194,6 +239,24 @@ async def transcribe(
         "word_timestamps": word_timestamps,
         "segment_timestamps": segment_timestamps,
         "vad_filter": vad_filter,
+        "beam_size": beam_size,
+        "best_of": best_of,
+        "patience": patience,
+        "condition_on_previous_text": condition_on_previous_text,
+        "initial_prompt": initial_prompt,
+        "repetition_penalty": repetition_penalty,
+        "no_repeat_ngram_size": no_repeat_ngram_size,
+        "compression_ratio_threshold": compression_ratio_threshold,
+        "log_prob_threshold": log_prob_threshold,
+        "no_speech_threshold": no_speech_threshold,
+        "prompt_reset_on_temperature": prompt_reset_on_temperature,
+        "hallucination_silence_threshold": hallucination_silence_threshold,
+        "max_new_tokens": max_new_tokens,
+        "vad_threshold": vad_threshold,
+        "vad_neg_threshold": vad_neg_threshold,
+        "vad_min_speech_duration_ms": vad_min_speech_duration_ms,
+        "vad_min_silence_duration_ms": vad_min_silence_duration_ms,
+        "vad_speech_pad_ms": vad_speech_pad_ms,
         "request_id": x_request_id,
     }
 
@@ -220,6 +283,24 @@ async def transcribe_job_create(
     word_timestamps: Optional[bool] = Form(default=None),
     segment_timestamps: Optional[bool] = Form(default=None),
     vad_filter: Optional[bool] = Form(default=None),
+    beam_size: Optional[int] = Form(default=None),
+    best_of: Optional[int] = Form(default=None),
+    patience: Optional[float] = Form(default=None),
+    condition_on_previous_text: Optional[bool] = Form(default=None),
+    initial_prompt: Optional[str] = Form(default=None),
+    repetition_penalty: Optional[float] = Form(default=None),
+    no_repeat_ngram_size: Optional[int] = Form(default=None),
+    compression_ratio_threshold: Optional[float] = Form(default=None),
+    log_prob_threshold: Optional[float] = Form(default=None),
+    no_speech_threshold: Optional[float] = Form(default=None),
+    prompt_reset_on_temperature: Optional[float] = Form(default=None),
+    hallucination_silence_threshold: Optional[float] = Form(default=None),
+    max_new_tokens: Optional[int] = Form(default=None),
+    vad_threshold: Optional[float] = Form(default=None),
+    vad_neg_threshold: Optional[float] = Form(default=None),
+    vad_min_speech_duration_ms: Optional[int] = Form(default=None),
+    vad_min_silence_duration_ms: Optional[int] = Form(default=None),
+    vad_speech_pad_ms: Optional[int] = Form(default=None),
     x_request_id: Optional[str] = Header(default=None),
 ) -> Dict[str, Any]:
     options: Dict[str, Any] = {
@@ -232,6 +313,24 @@ async def transcribe_job_create(
         "word_timestamps": word_timestamps,
         "segment_timestamps": segment_timestamps,
         "vad_filter": vad_filter,
+        "beam_size": beam_size,
+        "best_of": best_of,
+        "patience": patience,
+        "condition_on_previous_text": condition_on_previous_text,
+        "initial_prompt": initial_prompt,
+        "repetition_penalty": repetition_penalty,
+        "no_repeat_ngram_size": no_repeat_ngram_size,
+        "compression_ratio_threshold": compression_ratio_threshold,
+        "log_prob_threshold": log_prob_threshold,
+        "no_speech_threshold": no_speech_threshold,
+        "prompt_reset_on_temperature": prompt_reset_on_temperature,
+        "hallucination_silence_threshold": hallucination_silence_threshold,
+        "max_new_tokens": max_new_tokens,
+        "vad_threshold": vad_threshold,
+        "vad_neg_threshold": vad_neg_threshold,
+        "vad_min_speech_duration_ms": vad_min_speech_duration_ms,
+        "vad_min_silence_duration_ms": vad_min_silence_duration_ms,
+        "vad_speech_pad_ms": vad_speech_pad_ms,
         "request_id": x_request_id,
     }
     job = await request.app.state.services.transcription.create_transcription_job(file, options)
@@ -273,6 +372,62 @@ async def admin_config(request: Request) -> Dict[str, Any]:
         "generated_at": now_utc(),
         "precedence": "env > config.yml > defaults",
         "config": _redacted_config(settings),
+    }
+
+
+@app.get(
+    "/admin/system/config-editable",
+    response_model=EditableConfigResponse,
+    tags=["admin-system"],
+    dependencies=[Depends(_require_admin)],
+    summary="Editable config payload (file + effective)",
+)
+async def admin_config_editable(request: Request) -> Dict[str, Any]:
+    cfg_path = _config_file_path()
+    settings: Settings = request.app.state.settings
+    file_config = _load_file_config(cfg_path)
+    return {
+        "generated_at": now_utc(),
+        "config_path": str(cfg_path),
+        "file_config": file_config,
+        "effective_config": settings.model_dump(),
+        "precedence": "env > config.yml > defaults",
+    }
+
+
+@app.put(
+    "/admin/system/config-editable",
+    response_model=EditableConfigResponse,
+    tags=["admin-system"],
+    dependencies=[Depends(_require_admin)],
+    summary="Update config file and reload runtime settings",
+)
+async def admin_config_editable_update(request: Request, payload: EditableConfigUpdateRequest) -> Dict[str, Any]:
+    cfg_path = _config_file_path()
+
+    Settings.model_validate(payload.config)
+
+    if payload.persist_to_file:
+        cfg_path.parent.mkdir(parents=True, exist_ok=True)
+        with cfg_path.open("w", encoding="utf-8") as f:
+            yaml.safe_dump(payload.config, f, allow_unicode=True, sort_keys=False)
+
+    if payload.reload_runtime:
+        if payload.persist_to_file:
+            get_settings.cache_clear()
+            refreshed = load_settings(config_file=str(cfg_path))
+        else:
+            refreshed = Settings.model_validate(payload.config)
+        await _apply_runtime_settings(request, refreshed)
+
+    settings: Settings = request.app.state.settings
+    file_config = _load_file_config(cfg_path)
+    return {
+        "generated_at": now_utc(),
+        "config_path": str(cfg_path),
+        "file_config": file_config,
+        "effective_config": settings.model_dump(),
+        "precedence": "env > config.yml > defaults",
     }
 
 

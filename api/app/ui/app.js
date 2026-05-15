@@ -9,15 +9,46 @@ const els = {
   adminHeader: $("adminHeader"),
   btnSaveAdmin: $("btnSaveAdmin"),
   btnReloadAll: $("btnReloadAll"),
+  btnLoadConfig: $("btnLoadConfig"),
+  btnUseEffectiveConfig: $("btnUseEffectiveConfig"),
+  btnSaveConfig: $("btnSaveConfig"),
+  configPresetSelect: $("configPresetSelect"),
+  btnApplyConfigPreset: $("btnApplyConfigPreset"),
+  configPath: $("configPath"),
+  configPersistFile: $("configPersistFile"),
+  configReloadRuntime: $("configReloadRuntime"),
+  configEditor: $("configEditor"),
+  configRaw: $("configRaw"),
   btnRefreshModels: $("btnRefreshModels"),
   btnRefreshJobs: $("btnRefreshJobs"),
   providerInput: $("providerInput"),
+  transcribePresetSelect: $("transcribePresetSelect"),
+  btnApplyTranscribePreset: $("btnApplyTranscribePreset"),
   modelInput: $("modelInput"),
   fileInput: $("fileInput"),
   languageInput: $("languageInput"),
   responseFormatInput: $("responseFormatInput"),
   temperatureInput: $("temperatureInput"),
+  beamSizeInput: $("beamSizeInput"),
+  bestOfInput: $("bestOfInput"),
+  patienceInput: $("patienceInput"),
   promptInput: $("promptInput"),
+  initialPromptInput: $("initialPromptInput"),
+  conditionOnPreviousTextInput: $("conditionOnPreviousTextInput"),
+  requestIdInput: $("requestIdInput"),
+  repetitionPenaltyInput: $("repetitionPenaltyInput"),
+  noRepeatNgramSizeInput: $("noRepeatNgramSizeInput"),
+  maxNewTokensInput: $("maxNewTokensInput"),
+  compressionRatioThresholdInput: $("compressionRatioThresholdInput"),
+  logProbThresholdInput: $("logProbThresholdInput"),
+  noSpeechThresholdInput: $("noSpeechThresholdInput"),
+  promptResetOnTemperatureInput: $("promptResetOnTemperatureInput"),
+  hallucinationSilenceThresholdInput: $("hallucinationSilenceThresholdInput"),
+  vadThresholdInput: $("vadThresholdInput"),
+  vadNegThresholdInput: $("vadNegThresholdInput"),
+  vadMinSpeechDurationMsInput: $("vadMinSpeechDurationMsInput"),
+  vadMinSilenceDurationMsInput: $("vadMinSilenceDurationMsInput"),
+  vadSpeechPadMsInput: $("vadSpeechPadMsInput"),
   wordTimestampsInput: $("wordTimestampsInput"),
   segmentTimestampsInput: $("segmentTimestampsInput"),
   vadFilterInput: $("vadFilterInput"),
@@ -28,6 +59,7 @@ const els = {
   transcribeProgressBar: $("transcribeProgressBar"),
   transcribeJobMeta: $("transcribeJobMeta"),
   btnCopyText: $("btnCopyText"),
+  btnDownloadResult: $("btnDownloadResult"),
   providerModels: $("providerModels"),
   presetModels: $("presetModels"),
   localModels: $("localModels"),
@@ -54,9 +86,210 @@ const state = {
   recommendedFiles: [],
   jobs: [],
   latestText: "",
+  latestResult: null,
   currentTranscribeJobId: null,
   transcribePollHandle: null,
   pollHandle: null,
+  configFile: {},
+  configEffective: {},
+  configDraft: {},
+  configTypeHints: {},
+};
+
+const CONFIG_PRESETS = {
+  "local-max-quality": {
+    label: "Local · Max Quality",
+    patch: {
+      transcription: {
+        default_provider: "local",
+        default_language: "fa",
+        enable_word_timestamps: true,
+        enable_segment_timestamps: true,
+      },
+      local: {
+        model_id: "large-v3",
+        device: "cuda",
+        compute_type: "float16",
+        beam_size: 8,
+        best_of: 8,
+        patience: 1.2,
+        temperature: 0.0,
+        vad_filter: true,
+        condition_on_previous_text: true,
+        repetition_penalty: 1.0,
+        no_repeat_ngram_size: 0,
+        compression_ratio_threshold: 2.4,
+        log_prob_threshold: -1.0,
+        no_speech_threshold: 0.6,
+        prompt_reset_on_temperature: 0.5,
+        hallucination_silence_threshold: null,
+      },
+      processing: {
+        always_extract_audio: true,
+        audio_sample_rate: 16000,
+        audio_channels: 1,
+      },
+    },
+  },
+  "local-balanced": {
+    label: "Local · Balanced",
+    patch: {
+      transcription: {
+        default_provider: "local",
+        default_language: "fa",
+      },
+      local: {
+        model_id: "small",
+        device: "auto",
+        compute_type: "auto",
+        beam_size: 5,
+        best_of: 5,
+        patience: 1.0,
+        temperature: 0.0,
+        vad_filter: true,
+        condition_on_previous_text: true,
+        repetition_penalty: 1.0,
+        no_repeat_ngram_size: 0,
+      },
+    },
+  },
+  "local-fast": {
+    label: "Local · Fast",
+    patch: {
+      transcription: {
+        default_provider: "local",
+        default_language: "fa",
+        enable_word_timestamps: false,
+        enable_segment_timestamps: true,
+      },
+      local: {
+        model_id: "tiny",
+        device: "auto",
+        compute_type: "int8",
+        beam_size: 1,
+        best_of: 1,
+        patience: 1.0,
+        temperature: 0.0,
+        vad_filter: true,
+        condition_on_previous_text: true,
+        repetition_penalty: 1.0,
+        no_repeat_ngram_size: 0,
+      },
+    },
+  },
+  "api-openai-default": {
+    label: "API · OpenAI Default",
+    patch: {
+      transcription: {
+        default_provider: "openai",
+      },
+      providers: {
+        openai: {
+          enabled: true,
+          base_url: "https://api.openai.com",
+          model: "gpt-4o-transcribe",
+          transcriptions_path: "/v1/audio/transcriptions",
+          timeout_sec: 300,
+        },
+      },
+    },
+  },
+  "api-groq-default": {
+    label: "API · Groq Default",
+    patch: {
+      transcription: {
+        default_provider: "groq",
+      },
+      providers: {
+        groq: {
+          enabled: true,
+          base_url: "https://api.groq.com/openai",
+          model: "whisper-large-v3",
+          transcriptions_path: "/v1/audio/transcriptions",
+          timeout_sec: 300,
+        },
+      },
+    },
+  },
+};
+
+const TRANSCRIBE_PRESETS = {
+  "fa-max-quality": {
+    label: "FA · Max Quality",
+    values: {
+      provider: "local",
+      model: "large-v3",
+      language: "fa",
+      response_format: "verbose_json",
+      temperature: "0",
+      beam_size: "8",
+      best_of: "8",
+      patience: "1.2",
+      prompt: "",
+      initial_prompt: "",
+      word_timestamps: true,
+      segment_timestamps: true,
+      vad_filter: true,
+      condition_on_previous_text: true,
+      repetition_penalty: "1.0",
+      no_repeat_ngram_size: "0",
+      compression_ratio_threshold: "2.4",
+      log_prob_threshold: "-1.0",
+      no_speech_threshold: "0.6",
+      prompt_reset_on_temperature: "0.5",
+      hallucination_silence_threshold: "",
+    },
+  },
+  "fa-balanced": {
+    label: "FA · Balanced",
+    values: {
+      provider: "local",
+      model: "small",
+      language: "fa",
+      response_format: "verbose_json",
+      temperature: "0",
+      beam_size: "5",
+      best_of: "5",
+      patience: "1.0",
+      prompt: "",
+      initial_prompt: "",
+      word_timestamps: false,
+      segment_timestamps: true,
+      vad_filter: true,
+      condition_on_previous_text: true,
+      repetition_penalty: "1.0",
+      no_repeat_ngram_size: "0",
+      compression_ratio_threshold: "2.4",
+      log_prob_threshold: "-1.0",
+      no_speech_threshold: "0.6",
+      prompt_reset_on_temperature: "0.5",
+    },
+  },
+  "fa-fast": {
+    label: "FA · Fast",
+    values: {
+      provider: "local",
+      model: "tiny",
+      language: "fa",
+      response_format: "text",
+      temperature: "0",
+      beam_size: "1",
+      best_of: "1",
+      patience: "1.0",
+      prompt: "",
+      initial_prompt: "",
+      word_timestamps: false,
+      segment_timestamps: true,
+      vad_filter: true,
+      condition_on_previous_text: true,
+      repetition_penalty: "1.0",
+      no_repeat_ngram_size: "0",
+      compression_ratio_threshold: "2.4",
+      log_prob_threshold: "-1.0",
+      no_speech_threshold: "0.6",
+      prompt_reset_on_temperature: "0.5",
+    },
+  },
 };
 
 function saveAdmin() {
@@ -128,11 +361,16 @@ async function apiFetch(path, { method = "GET", body, admin = false, timeoutMs =
   return data;
 }
 
-function createTranscribeJobWithProgress(formData, onUploadProgress) {
+function createTranscribeJobWithProgress(formData, onUploadProgress, headers = {}) {
   return new Promise((resolve, reject) => {
     const xhr = new XMLHttpRequest();
     xhr.open("POST", "/transcribe/jobs", true);
     xhr.timeout = 30 * 60 * 1000;
+    Object.entries(headers).forEach(([key, value]) => {
+      if (value !== null && value !== undefined && String(value).trim() !== "") {
+        xhr.setRequestHeader(key, String(value));
+      }
+    });
 
     xhr.upload.onprogress = (evt) => {
       if (!evt.lengthComputable) return;
@@ -177,6 +415,258 @@ function formatBytes(bytes) {
 function formatParams(million) {
   if (!million) return "-";
   return `${million.toLocaleString()}M`;
+}
+
+function isPlainObject(value) {
+  return !!value && typeof value === "object" && !Array.isArray(value);
+}
+
+function deepClone(value) {
+  return JSON.parse(JSON.stringify(value ?? {}));
+}
+
+function deepMerge(base, override) {
+  if (!isPlainObject(base)) return deepClone(override);
+  const out = deepClone(base);
+  if (!isPlainObject(override)) return out;
+  Object.keys(override).forEach((key) => {
+    if (isPlainObject(out[key]) && isPlainObject(override[key])) {
+      out[key] = deepMerge(out[key], override[key]);
+    } else {
+      out[key] = deepClone(override[key]);
+    }
+  });
+  return out;
+}
+
+function getByPath(obj, path) {
+  return path.split(".").reduce((cursor, key) => (cursor == null ? undefined : cursor[key]), obj);
+}
+
+function setByPath(obj, path, value) {
+  const keys = path.split(".");
+  let cursor = obj;
+  for (let i = 0; i < keys.length - 1; i += 1) {
+    const k = keys[i];
+    if (!isPlainObject(cursor[k])) {
+      cursor[k] = {};
+    }
+    cursor = cursor[k];
+  }
+  cursor[keys[keys.length - 1]] = value;
+}
+
+function collectLeafPaths(obj, prefix = "", out = []) {
+  if (Array.isArray(obj) || !isPlainObject(obj)) {
+    out.push(prefix);
+    return out;
+  }
+  Object.keys(obj).forEach((key) => {
+    const next = prefix ? `${prefix}.${key}` : key;
+    collectLeafPaths(obj[key], next, out);
+  });
+  return out;
+}
+
+function inferValueType(value) {
+  if (Array.isArray(value)) return "array";
+  if (value === null) return "null";
+  return typeof value;
+}
+
+function buildTypeHints() {
+  const hints = {};
+  [state.configEffective, state.configFile, state.configDraft].forEach((source) => {
+    collectLeafPaths(source)
+      .filter(Boolean)
+      .forEach((path) => {
+        const t = inferValueType(getByPath(source, path));
+        if (!(path in hints) || hints[path] === "null") {
+          hints[path] = t;
+        }
+      });
+  });
+  state.configTypeHints = hints;
+}
+
+function parseTypedValue(raw, typeHint) {
+  if (typeHint === "boolean") {
+    return String(raw).toLowerCase() === "true";
+  }
+  if (typeHint === "number") {
+    const n = Number(raw);
+    if (!Number.isFinite(n)) throw new Error(`عدد معتبر نیست: ${raw}`);
+    return n;
+  }
+  if (typeHint === "array") {
+    const parsed = JSON.parse(raw || "[]");
+    if (!Array.isArray(parsed)) throw new Error("برای array باید JSON آرایه وارد شود.");
+    return parsed;
+  }
+  if (raw === "null") return null;
+  return String(raw);
+}
+
+function renderConfigEditor() {
+  els.configEditor.innerHTML = "";
+  if (!isPlainObject(state.configDraft) || !Object.keys(state.configDraft).length) {
+    els.configEditor.innerHTML = '<p class="hint">ابتدا تنظیمات را بارگذاری کن.</p>';
+    return;
+  }
+
+  buildTypeHints();
+  const allPaths = collectLeafPaths(state.configDraft).filter(Boolean).sort();
+  const groups = {};
+  allPaths.forEach((path) => {
+    const top = path.split(".")[0];
+    if (!groups[top]) groups[top] = [];
+    groups[top].push(path);
+  });
+
+  Object.keys(groups).sort().forEach((section) => {
+    const card = document.createElement("article");
+    card.className = "item stack-lg";
+    card.innerHTML = `<div class="item-head"><strong>${section}</strong><span class="chip">${groups[section].length}</span></div>`;
+
+    const grid = document.createElement("div");
+    grid.className = "grid cols-3";
+
+    groups[section].forEach((path) => {
+      const typeHint = state.configTypeHints[path] || "string";
+      const value = getByPath(state.configDraft, path);
+      const label = document.createElement("label");
+      const title = document.createElement("span");
+      title.textContent = path;
+      label.appendChild(title);
+
+      if (typeHint === "boolean") {
+        const wrap = document.createElement("label");
+        wrap.className = "toggle";
+        const input = document.createElement("input");
+        input.type = "checkbox";
+        input.checked = Boolean(value);
+        input.addEventListener("change", () => {
+          setByPath(state.configDraft, path, input.checked);
+          syncConfigRawFromDraft();
+        });
+        const txt = document.createElement("span");
+        txt.textContent = input.checked ? "true" : "false";
+        input.addEventListener("change", () => {
+          txt.textContent = input.checked ? "true" : "false";
+        });
+        wrap.append(input, txt);
+        label.appendChild(wrap);
+      } else if (typeHint === "array") {
+        const input = document.createElement("textarea");
+        input.rows = 2;
+        input.className = "mono";
+        input.value = JSON.stringify(value ?? [], null, 2);
+        input.addEventListener("change", () => {
+          setByPath(state.configDraft, path, parseTypedValue(input.value, "array"));
+          syncConfigRawFromDraft();
+        });
+        label.appendChild(input);
+      } else {
+        const input = document.createElement("input");
+        input.type = typeHint === "number" ? "number" : "text";
+        if (typeHint === "number") {
+          input.step = "any";
+        }
+        input.value = value === null || value === undefined ? "" : String(value);
+        input.placeholder = typeHint;
+        input.addEventListener("change", () => {
+          const raw = input.value.trim();
+          const typed = raw === "" ? (typeHint === "number" ? 0 : "") : parseTypedValue(raw, typeHint);
+          setByPath(state.configDraft, path, typed);
+          syncConfigRawFromDraft();
+        });
+        label.appendChild(input);
+      }
+
+      grid.appendChild(label);
+    });
+
+    card.appendChild(grid);
+    els.configEditor.appendChild(card);
+  });
+}
+
+function syncConfigRawFromDraft() {
+  els.configRaw.value = JSON.stringify(state.configDraft, null, 2);
+}
+
+function loadDraftFromRawInput() {
+  const parsed = JSON.parse(els.configRaw.value || "{}");
+  if (!isPlainObject(parsed)) {
+    throw new Error("فرمت JSON باید object باشد.");
+  }
+  state.configDraft = parsed;
+}
+
+function setupPresetSelects() {
+  els.configPresetSelect.innerHTML = "<option value=''>انتخاب preset</option>";
+  Object.entries(CONFIG_PRESETS).forEach(([key, preset]) => {
+    const opt = document.createElement("option");
+    opt.value = key;
+    opt.textContent = preset.label;
+    els.configPresetSelect.appendChild(opt);
+  });
+
+  els.transcribePresetSelect.innerHTML = "<option value=''>انتخاب preset</option>";
+  Object.entries(TRANSCRIBE_PRESETS).forEach(([key, preset]) => {
+    const opt = document.createElement("option");
+    opt.value = key;
+    opt.textContent = preset.label;
+    els.transcribePresetSelect.appendChild(opt);
+  });
+}
+
+function applyConfigPreset(name) {
+  const preset = CONFIG_PRESETS[name];
+  if (!preset) {
+    throw new Error("preset کانفیگ نامعتبر است.");
+  }
+  if (!isPlainObject(state.configDraft) || !Object.keys(state.configDraft).length) {
+    state.configDraft = deepClone(state.configEffective || {});
+  }
+  state.configDraft = deepMerge(state.configDraft, preset.patch);
+  renderConfigEditor();
+  syncConfigRawFromDraft();
+}
+
+function applyTranscribePreset(name) {
+  const preset = TRANSCRIBE_PRESETS[name];
+  if (!preset) {
+    throw new Error("preset ترنسکریپت نامعتبر است.");
+  }
+  const v = preset.values;
+  els.providerInput.value = v.provider;
+  els.modelInput.value = v.model;
+  els.languageInput.value = v.language;
+  els.responseFormatInput.value = v.response_format;
+  els.temperatureInput.value = v.temperature;
+  els.beamSizeInput.value = v.beam_size;
+  els.bestOfInput.value = v.best_of;
+  els.patienceInput.value = v.patience;
+  els.promptInput.value = v.prompt;
+  els.initialPromptInput.value = v.initial_prompt;
+  els.repetitionPenaltyInput.value = v.repetition_penalty || "";
+  els.noRepeatNgramSizeInput.value = v.no_repeat_ngram_size || "";
+  els.maxNewTokensInput.value = v.max_new_tokens || "";
+  els.compressionRatioThresholdInput.value = v.compression_ratio_threshold || "";
+  els.logProbThresholdInput.value = v.log_prob_threshold || "";
+  els.noSpeechThresholdInput.value = v.no_speech_threshold || "";
+  els.promptResetOnTemperatureInput.value = v.prompt_reset_on_temperature || "";
+  els.hallucinationSilenceThresholdInput.value = v.hallucination_silence_threshold || "";
+  els.vadThresholdInput.value = v.vad_threshold || "";
+  els.vadNegThresholdInput.value = v.vad_neg_threshold || "";
+  els.vadMinSpeechDurationMsInput.value = v.vad_min_speech_duration_ms || "";
+  els.vadMinSilenceDurationMsInput.value = v.vad_min_silence_duration_ms || "";
+  els.vadSpeechPadMsInput.value = v.vad_speech_pad_ms || "";
+  els.wordTimestampsInput.checked = Boolean(v.word_timestamps);
+  els.segmentTimestampsInput.checked = Boolean(v.segment_timestamps);
+  els.vadFilterInput.checked = Boolean(v.vad_filter);
+  els.conditionOnPreviousTextInput.checked = Boolean(v.condition_on_previous_text);
 }
 
 function fillProviders() {
@@ -481,12 +971,47 @@ async function loadJobs() {
   renderJobs();
 }
 
+function applyConfigPayload(payload, source = "file") {
+  state.configFile = isPlainObject(payload.file_config) ? payload.file_config : {};
+  state.configEffective = isPlainObject(payload.effective_config) ? payload.effective_config : {};
+
+  const base = deepClone(state.configEffective);
+  const fileOverlay = deepClone(state.configFile);
+  const mergedDraft = deepMerge(base, fileOverlay);
+
+  state.configDraft = source === "effective" ? deepClone(state.configEffective) : mergedDraft;
+  els.configPath.value = payload.config_path || "";
+  renderConfigEditor();
+  syncConfigRawFromDraft();
+}
+
+async function loadConfigEditable(source = "file") {
+  const payload = await apiFetch("/admin/system/config-editable", { admin: true });
+  applyConfigPayload(payload, source);
+}
+
+async function saveConfigEditable() {
+  loadDraftFromRawInput();
+  const payload = await apiFetch("/admin/system/config-editable", {
+    method: "PUT",
+    admin: true,
+    timeoutMs: 30000,
+    body: {
+      config: state.configDraft,
+      persist_to_file: Boolean(els.configPersistFile.checked),
+      reload_runtime: Boolean(els.configReloadRuntime.checked),
+    },
+  });
+  applyConfigPayload(payload, "file");
+}
+
 async function refreshAll() {
   setStatus("در حال بروزرسانی اطلاعات...");
   const errors = [];
   const tasks = [
     loadHealth().catch((err) => errors.push(`health: ${err.message}`)),
     loadProviders().catch((err) => errors.push(`providers: ${err.message}`)),
+    loadConfigEditable("file").catch((err) => errors.push(`config: ${err.message}`)),
     loadPresets().catch((err) => errors.push(`presets: ${err.message}`)),
     loadLocalModels().catch((err) => errors.push(`local: ${err.message}`)),
     loadJobs().catch((err) => errors.push(`jobs: ${err.message}`)),
@@ -523,20 +1048,44 @@ async function transcribeHandler(event) {
   appendIf("prompt", els.promptInput.value);
   appendIf("response_format", els.responseFormatInput.value);
   appendIf("temperature", els.temperatureInput.value);
+  appendIf("beam_size", els.beamSizeInput.value);
+  appendIf("best_of", els.bestOfInput.value);
+  appendIf("patience", els.patienceInput.value);
+  appendIf("initial_prompt", els.initialPromptInput.value);
+  appendIf("repetition_penalty", els.repetitionPenaltyInput.value);
+  appendIf("no_repeat_ngram_size", els.noRepeatNgramSizeInput.value);
+  appendIf("max_new_tokens", els.maxNewTokensInput.value);
+  appendIf("compression_ratio_threshold", els.compressionRatioThresholdInput.value);
+  appendIf("log_prob_threshold", els.logProbThresholdInput.value);
+  appendIf("no_speech_threshold", els.noSpeechThresholdInput.value);
+  appendIf("prompt_reset_on_temperature", els.promptResetOnTemperatureInput.value);
+  appendIf("hallucination_silence_threshold", els.hallucinationSilenceThresholdInput.value);
+  appendIf("vad_threshold", els.vadThresholdInput.value);
+  appendIf("vad_neg_threshold", els.vadNegThresholdInput.value);
+  appendIf("vad_min_speech_duration_ms", els.vadMinSpeechDurationMsInput.value);
+  appendIf("vad_min_silence_duration_ms", els.vadMinSilenceDurationMsInput.value);
+  appendIf("vad_speech_pad_ms", els.vadSpeechPadMsInput.value);
 
   form.append("word_timestamps", String(els.wordTimestampsInput.checked));
   form.append("segment_timestamps", String(els.segmentTimestampsInput.checked));
   form.append("vad_filter", String(els.vadFilterInput.checked));
+  form.append("condition_on_previous_text", String(els.conditionOnPreviousTextInput.checked));
+
+  const requestId = (els.requestIdInput.value || "").trim();
 
   setStatus("در حال آپلود فایل...", "warn");
   els.transcribeResult.textContent = "...";
   setTranscribeProgress(0, "uploading", "-");
 
   try {
-    const job = await createTranscribeJobWithProgress(form, (uploadPercent) => {
-      setTranscribeProgress(uploadPercent, "uploading", "-");
-      setStatus(`در حال آپلود فایل... ${uploadPercent.toFixed(0)}%`, "warn");
-    });
+    const job = await createTranscribeJobWithProgress(
+      form,
+      (uploadPercent) => {
+        setTranscribeProgress(uploadPercent, "uploading", "-");
+        setStatus(`در حال آپلود فایل... ${uploadPercent.toFixed(0)}%`, "warn");
+      },
+      requestId ? { "x-request-id": requestId } : {}
+    );
     state.currentTranscribeJobId = job.job_id;
     setTranscribeProgress(Number(job.progress_percent || 0), job.stage || "queued", job.job_id);
     setStatus("job ترنسکریپت ساخته شد؛ در حال پردازش...", "warn");
@@ -585,6 +1134,7 @@ function stopTranscribePolling() {
 }
 
 function renderTranscribeResult(out) {
+  state.latestResult = out;
   state.latestText = out.text || "";
   const pretty = {
     text: out.text,
@@ -638,6 +1188,28 @@ function copyTextHandler() {
   );
 }
 
+function downloadResultHandler() {
+  const textBody = (state.latestText || "").trim();
+  const fallback = state.latestResult ? JSON.stringify(state.latestResult, null, 2) : (els.transcribeResult.textContent || "");
+  const body = textBody || fallback;
+  if (!body.trim()) {
+    setStatus("خروجی برای دانلود وجود ندارد.", "warn");
+    return;
+  }
+
+  const blob = new Blob([body], { type: "text/plain;charset=utf-8" });
+  const url = URL.createObjectURL(blob);
+  const stamp = new Date().toISOString().replace(/[:.]/g, "-");
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = `transcription-${stamp}.txt`;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  URL.revokeObjectURL(url);
+  setStatus("فایل خروجی دانلود شد.", "ok");
+}
+
 function attachEvents() {
   els.btnSaveAdmin.addEventListener("click", () => {
     saveAdmin();
@@ -645,6 +1217,65 @@ function attachEvents() {
   });
 
   els.btnReloadAll.addEventListener("click", refreshAll);
+  els.btnLoadConfig.addEventListener("click", async () => {
+    try {
+      await loadConfigEditable("file");
+      setStatus("تنظیمات از فایل بارگذاری شد.", "ok");
+    } catch (err) {
+      setStatus(`خطا در بارگذاری تنظیمات: ${err.message}`, "bad");
+    }
+  });
+  els.btnUseEffectiveConfig.addEventListener("click", () => {
+    state.configDraft = deepClone(state.configEffective || {});
+    renderConfigEditor();
+    syncConfigRawFromDraft();
+    setStatus("Effective config در فرم قرار گرفت.", "ok");
+  });
+  els.btnSaveConfig.addEventListener("click", async () => {
+    try {
+      await saveConfigEditable();
+      setStatus("تنظیمات ذخیره و اعمال شد.", "ok");
+      await loadHealth();
+      await loadProviders();
+    } catch (err) {
+      setStatus(`ذخیره تنظیمات ناموفق بود: ${err.message}`, "bad");
+    }
+  });
+  els.configRaw.addEventListener("blur", () => {
+    try {
+      loadDraftFromRawInput();
+      renderConfigEditor();
+    } catch (err) {
+      setStatus(`JSON نامعتبر: ${err.message}`, "bad");
+    }
+  });
+  els.btnApplyConfigPreset.addEventListener("click", () => {
+    const name = els.configPresetSelect.value;
+    if (!name) {
+      setStatus("یک preset کانفیگ انتخاب کن.", "warn");
+      return;
+    }
+    try {
+      applyConfigPreset(name);
+      setStatus("preset کانفیگ اعمال شد.", "ok");
+    } catch (err) {
+      setStatus(`خطا در preset کانفیگ: ${err.message}`, "bad");
+    }
+  });
+  els.btnApplyTranscribePreset.addEventListener("click", () => {
+    const name = els.transcribePresetSelect.value;
+    if (!name) {
+      setStatus("یک preset ترنسکریپت انتخاب کن.", "warn");
+      return;
+    }
+    try {
+      applyTranscribePreset(name);
+      setStatus("preset ترنسکریپت اعمال شد.", "ok");
+    } catch (err) {
+      setStatus(`خطا در preset ترنسکریپت: ${err.message}`, "bad");
+    }
+  });
+
   els.btnRefreshModels.addEventListener("click", async () => {
     try {
       await loadPresets();
@@ -677,6 +1308,7 @@ function attachEvents() {
   els.transcribeForm.addEventListener("submit", transcribeHandler);
   els.btnDownloadModel.addEventListener("click", downloadModelHandler);
   els.btnCopyText.addEventListener("click", copyTextHandler);
+  els.btnDownloadResult.addEventListener("click", downloadResultHandler);
 
   els.downloadPreset.addEventListener("change", () => {
     const chosen = state.presets.find((x) => x.name === els.downloadPreset.value);
@@ -717,6 +1349,7 @@ function startPolling() {
 
 async function init() {
   loadAdmin();
+  setupPresetSelects();
   attachEvents();
   await refreshAll();
   setTimeout(() => {
