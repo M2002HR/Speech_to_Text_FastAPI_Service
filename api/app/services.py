@@ -2065,11 +2065,17 @@ class TranscriptionService:
                 chunk_path = await self.media.extract_audio_window(prepared_path, float(w["start"]), float(w["end"]))
                 chunk_temp_paths.append(chunk_path)
                 chunk_duration = max(0.0, float(w["end"]) - float(w["start"]))
+                chunk_start_pct = (idx / max(1, total_windows)) * 100.0
+                chunk_end_pct = ((idx + 1) / max(1, total_windows)) * 100.0
                 chunk_out = await self.local.transcribe(
                     chunk_path,
                     run_options,
                     duration_hint=chunk_duration,
-                    progress_cb=None,
+                    progress_cb=(
+                        (lambda p, _s=chunk_start_pct, _e=chunk_end_pct: progress_cb(round(_s + ((_e - _s) * (float(p) / 100.0)), 2)))
+                        if progress_cb is not None
+                        else None
+                    ),
                 )
                 chunk_runs.append(
                     {
