@@ -102,12 +102,12 @@ const state = {
 };
 
 const CONFIG_PRESETS = {
-  "local-ultra-accuracy-fa-ethics": {
-    label: "Local · Ultra Accuracy (FA Ethics)",
+  "local-ultra-stable": {
+    label: "Local · Ultra Stable (General)",
     patch: {
       transcription: {
         default_provider: "local",
-        default_language: "fa",
+        default_language: null,
         enable_word_timestamps: true,
         enable_segment_timestamps: true,
       },
@@ -129,14 +129,13 @@ const CONFIG_PRESETS = {
         prompt_reset_on_temperature: 0.5,
         hallucination_silence_threshold: null,
         long_audio_chunking_enabled: true,
-        long_audio_chunk_minutes: 20,
-        long_audio_overlap_minutes: 10,
-        long_audio_min_duration_minutes: 20,
+        long_audio_chunk_minutes: 10,
+        long_audio_overlap_minutes: 5,
+        long_audio_min_duration_minutes: 10,
         chunk_merge_similarity_threshold: 0.72,
         chunk_merge_max_word_overlap: 48,
-        vocabulary_bias_enabled: true,
-        vocabulary_bias_text:
-          "اخلاق پژوهشی، اخلاق حرفه‌ای، توسعه پایدار علمی، کارگزاران علمی، آسیب‌های اخلاق پژوهشی، مهندسی برق و کنترل، ارزیابی، کاربردی، Applied Ethics، نظریه اخلاق، فرااخلاق، سرقت علمی، plagiarism، National Post، Ryerson، Electrical Engineering",
+        vocabulary_bias_enabled: false,
+        vocabulary_bias_text: null,
       },
       processing: {
         always_extract_audio: true,
@@ -262,12 +261,12 @@ const CONFIG_PRESETS = {
 };
 
 const TRANSCRIBE_PRESETS = {
-  "fa-ultra-accuracy-ethics": {
-    label: "FA · Ultra Accuracy (Ethics)",
+  "ultra-stable-general": {
+    label: "Ultra Stable · General",
     values: {
       provider: "local",
       model: "large-v3",
-      language: "fa",
+      language: "",
       response_format: "verbose_json",
       temperature: "0",
       beam_size: "10",
@@ -276,11 +275,10 @@ const TRANSCRIBE_PRESETS = {
       prompt: "",
       initial_prompt: "",
       chunking_enabled: true,
-      chunk_minutes: "20",
-      chunk_overlap_minutes: "10",
-      chunk_min_duration_minutes: "20",
-      vocabulary_bias:
-        "اخلاق پژوهشی، اخلاق حرفه‌ای، توسعه پایدار علمی، کارگزاران علمی، آسیب‌های اخلاق پژوهشی، مهندسی برق و کنترل، ارزیابی، کاربردی، Applied Ethics، فرااخلاق، سرقت علمی، plagiarism، National Post، Ryerson، Electrical Engineering",
+      chunk_minutes: "10",
+      chunk_overlap_minutes: "5",
+      chunk_min_duration_minutes: "10",
+      vocabulary_bias: "",
       word_timestamps: true,
       segment_timestamps: true,
       vad_filter: true,
@@ -399,7 +397,7 @@ function setTranscribeProgress(percent, stage = "-", jobId = "-") {
     els.transcribeProgressBar.style.width = `${p}%`;
   }
   if (els.transcribePercent) {
-    els.transcribePercent.textContent = `${p.toFixed(0)}%`;
+    els.transcribePercent.textContent = `${p.toFixed(1)}%`;
   }
   if (els.transcribeJobMeta) {
     const shortId = jobId && jobId !== "-" ? jobId.slice(0, 8) : "-";

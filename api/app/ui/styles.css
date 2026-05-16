@@ -22,7 +22,7 @@ body {
   margin: 0;
   min-height: 100vh;
   color: var(--text);
-  font-family: "Vazirmatn", sans-serif;
+  font-family: "IRANYekan", "IranYekan", "IRANYekanX", "Vazirmatn", sans-serif;
   background-color: var(--bg);
   background-image:
     radial-gradient(circle at 12px 12px, #ffd9b8 2px, transparent 2px),
@@ -54,6 +54,25 @@ body {
   color: var(--accent);
   font-weight: 700;
   font-size: 0.78rem;
+}
+
+.brand-lockup {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+  margin-bottom: 0.25rem;
+}
+
+.brand-mark {
+  width: 2.1rem;
+  height: 2.1rem;
+  object-fit: contain;
+}
+
+.brand-wordmark {
+  width: clamp(8.5rem, 15vw, 11.5rem);
+  height: auto;
+  object-fit: contain;
 }
 
 h1 {
@@ -207,6 +226,7 @@ textarea:focus {
   font: inherit;
   font-weight: 600;
   box-shadow: 0 3px 0 #efc79f;
+  text-decoration: none;
 }
 
 .btn:hover {
@@ -310,6 +330,7 @@ textarea:focus {
   width: 0;
   height: 100%;
   background: linear-gradient(90deg, var(--accent-2), var(--accent-3));
+  transition: width 320ms cubic-bezier(0.22, 1, 0.36, 1);
 }
 
 .ok {
