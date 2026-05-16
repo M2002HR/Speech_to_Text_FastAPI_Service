@@ -1,0 +1,225 @@
+<!doctype html>
+<html lang="fa" dir="rtl">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Tootak · User Panel</title>
+  <link rel="icon" type="image/x-icon" href="/ui-assets/assets/tootak-favicon.ico" />
+  <link rel="icon" type="image/png" sizes="32x32" href="/ui-assets/assets/tootak-favicon-32.png" />
+  <link rel="icon" type="image/png" sizes="16x16" href="/ui-assets/assets/tootak-favicon-16.png" />
+  <link rel="apple-touch-icon" href="/ui-assets/assets/tootak-apple-touch-icon.png" />
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet" href="https://cdn-uicons.flaticon.com/uicons-regular-rounded/css/uicons-regular-rounded.css" />
+  <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@500;700;800&family=Vazirmatn:wght@400;500;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/ui-assets/user.css?v=20260516k" />
+</head>
+<body>
+  <div id="toastRoot" class="toast-root" aria-live="polite" aria-atomic="true"></div>
+
+  <main class="shell">
+    <header class="hero card">
+      <div class="hero-text">
+        <p class="eyebrow" data-i18n="app_badge">Tootak · User Panel</p>
+        <h1 data-i18n="app_title">پنل کاربری تبدیل گفتار</h1>
+      </div>
+
+      <div class="hero-tools">
+        <button id="uiLangToggle" class="icon-btn" type="button" data-i18n-title-key="tip_ui_lang" aria-label="UI language">
+          <i id="uiLangIcon" class="fi fi-rr-language" aria-hidden="true"></i>
+        </button>
+        <button id="themeToggle" class="icon-btn" type="button" data-i18n-title-key="tip_theme" aria-label="Theme">
+          <i id="themeIcon" class="fi fi-rr-moon-stars" aria-hidden="true"></i>
+        </button>
+        <button id="settingsBtn" class="icon-btn" type="button" data-i18n-title-key="tip_settings" aria-label="Settings">
+          <i class="fi fi-rr-settings" aria-hidden="true"></i>
+        </button>
+      </div>
+    </header>
+
+    <section class="card panel processing-panel">
+      <div class="panel-head">
+        <h2 data-i18n="panel_processing">پردازش</h2>
+        <span class="chip">Ultra Stable</span>
+      </div>
+
+      <form id="transcribeForm" class="stack">
+        <label class="field upload-field">
+          <span data-i18n="label_file">فایل صوتی/ویدیویی</span>
+          <input id="fileInput" name="file" type="file" accept="audio/*,video/*" required />
+        </label>
+
+        <div class="grid-2">
+          <label class="field lang-field">
+            <span class="field-head">
+              <span data-i18n="label_language">زبان متن</span>
+              <button class="help-dot" type="button" data-i18n-title-key="tip_language_help" aria-label="Language help">?</button>
+            </span>
+            <select id="languageSelect" name="language"></select>
+          </label>
+
+          <label class="field vocab-field">
+            <span class="field-head">
+              <span data-i18n="label_vocab">واژگان کمکی (اختیاری)</span>
+              <button class="help-dot" type="button" data-i18n-title-key="tip_vocab_help" aria-label="Vocabulary help">?</button>
+            </span>
+            <input id="vocabularyBiasInput" name="vocabulary_bias" data-i18n-placeholder="placeholder_vocab" placeholder="نام‌ها، اصطلاحات و واژه‌های حساس" />
+          </label>
+        </div>
+
+        <div class="actions">
+          <button id="btnTranscribe" class="icon-btn primary" type="submit" data-i18n-title-key="tip_start" aria-label="Start">
+            <i class="fi fi-rr-play" aria-hidden="true"></i>
+          </button>
+          <span id="transcribeStatus" class="hint">...</span>
+        </div>
+
+        <div class="progress-card">
+          <div class="progress-head">
+            <strong data-i18n="label_progress">پیشرفت</strong>
+            <span id="transcribePercent" class="chip">0.0%</span>
+          </div>
+          <div class="progress"><span id="transcribeProgressBar"></span></div>
+          <p id="transcribeJobMeta" class="hint">job: - | stage: -</p>
+        </div>
+      </form>
+    </section>
+
+    <section class="card panel output-panel">
+      <div class="panel-head">
+        <h2 data-i18n="panel_output">متن خروجی</h2>
+        <div class="actions">
+          <button id="btnOpenPromptModal" class="icon-btn" type="button" data-i18n-title-key="tip_prompt_modal" aria-label="Prompt helper">
+            <i class="fi fi-rr-file-edit" aria-hidden="true"></i>
+          </button>
+          <button id="btnCopyText" class="icon-btn" type="button" data-i18n-title-key="tip_copy" aria-label="Copy text">
+            <i class="fi fi-rr-copy" aria-hidden="true"></i>
+          </button>
+          <button id="btnDownloadResult" class="icon-btn" type="button" data-i18n-title-key="tip_download" aria-label="Download text">
+            <i class="fi fi-rr-download" aria-hidden="true"></i>
+          </button>
+        </div>
+      </div>
+      <pre id="transcribeResult" class="result" data-i18n="result_empty">هنوز پردازشی انجام نشده است.</pre>
+    </section>
+  </main>
+
+  <div id="settingsModal" class="modal-backdrop hidden" role="dialog" aria-modal="true" aria-labelledby="settingsModalTitle">
+    <div class="modal-card">
+      <div class="modal-head">
+        <h3 id="settingsModalTitle" data-i18n="settings_title">تنظیمات</h3>
+        <div class="modal-head-actions">
+          <button id="modalTabSettings" class="pill-btn active" type="button" data-i18n="settings_tab">تنظیمات</button>
+          <button id="modalTabAbout" class="pill-btn" type="button" data-i18n="about_tab">درباره ما</button>
+          <a id="modalLabLink" class="icon-btn small" href="/lab" data-i18n-title-key="tip_lab" aria-label="Lab panel">
+            <i class="fi fi-rr-flask-potion" aria-hidden="true"></i>
+          </a>
+          <button id="settingsModalClose" class="icon-btn small" type="button" data-i18n-title-key="tip_close" aria-label="Close">
+            <i class="fi fi-rr-circle-xmark" aria-hidden="true"></i>
+          </button>
+        </div>
+      </div>
+
+      <div id="settingsView" class="modal-view">
+        <div class="grid-3 compact">
+          <label class="field">
+            <span data-i18n="settings_model">مدل</span>
+            <select id="settingModel">
+              <option value="large-v3">large-v3</option>
+              <option value="large-v2">large-v2</option>
+              <option value="medium">medium</option>
+              <option value="small">small</option>
+              <option value="base">base</option>
+            </select>
+          </label>
+
+          <label class="field">
+            <span data-i18n="settings_chunk">چانک (دقیقه)</span>
+            <input id="settingChunkMinutes" type="number" min="1" step="1" />
+          </label>
+
+          <label class="field">
+            <span data-i18n="settings_overlap">اورلپ (دقیقه)</span>
+            <input id="settingOverlapMinutes" type="number" min="0" step="1" />
+          </label>
+        </div>
+
+        <div class="actions">
+          <button id="btnSaveRuntimeSettings" class="icon-btn primary small" type="button" data-i18n-title-key="tip_save_settings" aria-label="Save settings">
+            <span aria-hidden="true">✓</span>
+          </button>
+          <span id="settingsSaveHint" class="hint" data-i18n="settings_hint">تنظیمات در اجرای بعدی اعمال می‌شود.</span>
+        </div>
+
+        <div class="service-box">
+          <h4 data-i18n="settings_service_title">وضعیت سرویس</h4>
+          <div class="health-grid">
+            <div><span data-i18n="health_service">سرویس</span><strong id="modalHealthStatus">...</strong></div>
+            <div><span data-i18n="health_ffmpeg">ffmpeg</span><strong id="modalFfmpegStatus">...</strong></div>
+            <div><span data-i18n="health_ffprobe">ffprobe</span><strong id="modalFfprobeStatus">...</strong></div>
+            <div><span data-i18n="health_provider">Provider</span><strong id="modalDefaultProvider">...</strong></div>
+          </div>
+        </div>
+      </div>
+
+      <div id="aboutView" class="modal-view hidden">
+        <p data-i18n="about_text_1">Tootak یک پنل دقیق برای تبدیل گفتار به متن است که روی پایداری خروجی فایل‌های بلند تمرکز دارد.</p>
+        <p data-i18n="about_text_2">طراحی این پنل برای کاربران عمومی و حرفه‌ای انجام شده: اجرای ساده در پنل کاربری و کنترل کامل در پنل Lab.</p>
+        <p data-i18n="about_text_3">هسته پردازش برای مدیریت فایل‌های طولانی، کاهش تکرارهای انتهایی و نگه‌داشتن پیوستگی متن بهینه‌سازی شده است.</p>
+        <p data-i18n="about_text_4">در پنل کاربری تلاش شده خروجی مرحله‌به‌مرحله نمایش داده شود تا کاربر حین پردازش، از وضعیت واقعی کار مطلع باشد.</p>
+        <p data-i18n="about_text_5">خروجی نهایی به شکلی آماده می‌شود که بتوانی راحت آن را ویرایش کنی، ارائه بدهی یا به فرمت‌های قابل انتشار تبدیل کنی.</p>
+      </div>
+    </div>
+  </div>
+
+  <div id="promptModal" class="modal-backdrop hidden" role="dialog" aria-modal="true" aria-labelledby="promptModalTitle">
+    <div class="modal-card prompt-card">
+      <div class="modal-head">
+        <h3 id="promptModalTitle" data-i18n="prompt_modal_title">آماده‌ساز پرامپت خروجی</h3>
+        <button id="promptModalClose" class="icon-btn small" type="button" data-i18n-title-key="tip_close" aria-label="Close">
+          <i class="fi fi-rr-circle-xmark" aria-hidden="true"></i>
+        </button>
+      </div>
+
+      <p class="hint" data-i18n="prompt_helper_intro">برای تبدیل خروجی خام به متن تمیز و قابل ارائه، این پرامپت را کپی کن و همراه متن خروجی استفاده کن.</p>
+
+      <ol class="guide-list">
+        <li data-i18n="prompt_step_1">اول متن خروجی را از این صفحه کپی کن.</li>
+        <li data-i18n="prompt_step_2">پرامپت آماده را کپی کن.</li>
+        <li data-i18n="prompt_step_3">پرامپت را ارسال کن و متن خروجی را جایگزین placeholder کن.</li>
+      </ol>
+
+      <div class="grid-3 compact prompt-options">
+        <label class="field lang-field">
+          <span data-i18n="prompt_target_format">فرمت مقصد</span>
+          <select id="promptFormatSelect">
+            <option value="markdown" selected>Markdown</option>
+            <option value="plain">Plain Text</option>
+            <option value="html">HTML</option>
+          </select>
+        </label>
+        <label class="field lang-field">
+          <span data-i18n="prompt_language_label">زبان پرامپت</span>
+          <select id="promptLanguageSelect">
+            <option value="fa">فارسی</option>
+            <option value="en">English</option>
+          </select>
+        </label>
+        <label class="field">
+          <span data-i18n="prompt_topic_label">موضوع متن (اختیاری)</span>
+          <input id="promptTopicInput" type="text" data-i18n-placeholder="prompt_topic_placeholder" placeholder="مثلا: جلسه تحقیقاتی، مصاحبه، کلاس آموزشی" />
+        </label>
+        <div class="actions align-end prompt-copy-wrap">
+          <button id="btnCopyPrompt" class="icon-btn primary small" type="button" data-i18n-title-key="tip_copy_prompt" aria-label="Copy prompt">
+            <i class="fi fi-rr-copy" aria-hidden="true"></i>
+          </button>
+        </div>
+      </div>
+
+      <textarea id="preparedPromptText" class="prompt-area" readonly></textarea>
+    </div>
+  </div>
+
+  <script src="/ui-assets/user.js?v=20260516i" defer></script>
+</body>
+</html>
