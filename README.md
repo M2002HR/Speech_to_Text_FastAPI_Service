@@ -1,4 +1,4 @@
-﻿# Speech To Text Service (FastAPI)
+﻿# Tootak (FastAPI)
 
 A production-oriented FastAPI service that converts audio/video files to text.
 
@@ -10,7 +10,9 @@ Features:
 - Model download job system (create/list/status/cancel)
 - Hugging Face API integration for model discovery and downloads
 - Fully configurable via `config.yml` + `.env`
-- Modern built-in web UI dashboard at `/` (upload, settings, model management, download jobs)
+- Two built-in web UIs:
+  - User panel at `/` (simple ultra-stable transcription flow)
+  - Lab panel at `/lab` (full settings, model management, download jobs)
 - Swagger/OpenAPI docs and test suite
 
 ## Project Structure

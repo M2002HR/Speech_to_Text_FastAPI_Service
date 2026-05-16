@@ -215,6 +215,15 @@ def sanitize_name(value: str) -> str:
     return safe.strip("._") or "file"
 
 
+def sanitize_language_code(value: Optional[str]) -> Optional[str]:
+    if value is None:
+        return None
+    cleaned = str(value).strip().lower()
+    if not cleaned or cleaned == "auto":
+        return None
+    return cleaned
+
+
 def normalize_proxy_env() -> None:
     for key in ["ALL_PROXY", "all_proxy", "HTTP_PROXY", "http_proxy", "HTTPS_PROXY", "https_proxy"]:
         value = os.getenv(key)
@@ -763,10 +772,18 @@ class LocalTranscriber:
         segments_iter: Any,
         duration_for_progress: Optional[float],
         progress_cb: Optional[Callable[[float], None]],
+        segment_text_cb: Optional[Callable[[str], None]] = None,
     ) -> List[Any]:
         segments_raw: List[Any] = []
         for seg in segments_iter:
             segments_raw.append(seg)
+            if segment_text_cb is not None:
+                try:
+                    text_seg = str(getattr(seg, "text", "") or "").strip()
+                    if text_seg:
+                        segment_text_cb(text_seg)
+                except Exception:
+                    pass
             if progress_cb and duration_for_progress and duration_for_progress > 0:
                 try:
                     pct = max(0.0, min(99.5, (float(seg.end) / duration_for_progress) * 100.0))
@@ -781,6 +798,7 @@ class LocalTranscriber:
         options: Dict[str, Any],
         duration_hint: Optional[float] = None,
         progress_cb: Optional[Callable[[float], None]] = None,
+        partial_text_cb: Optional[Callable[[str], None]] = None,
     ) -> Dict[str, Any]:
         requested_model_id = str(options.get("model") or self.settings.local.model_id)
         resolved_model_id = self._resolve_model_id(requested_model_id)
@@ -896,8 +914,11 @@ class LocalTranscriber:
         if vad_speech_pad_ms is not None:
             vad_parameters["speech_pad_ms"] = int(vad_speech_pad_ms)
 
+        language_code = sanitize_language_code(options.get("language")) or sanitize_language_code(
+            self.settings.transcription.default_language
+        )
         kwargs = {
-            "language": options.get("language") or self.settings.transcription.default_language,
+            "language": language_code,
             "beam_size": beam_size,
             "best_of": best_of,
             "patience": patience,
@@ -924,6 +945,16 @@ class LocalTranscriber:
         async def _decode_once(decode_kwargs: Dict[str, Any]) -> Dict[str, Any]:
             started = time.perf_counter()
             segments_iter, info_obj = await asyncio.to_thread(model.transcribe, str(audio_path), **decode_kwargs)
+            running_loop = asyncio.get_running_loop()
+            chunk_partial_parts: List[str] = []
+
+            def _segment_text_cb(text_segment: str) -> None:
+                if partial_text_cb is None:
+                    return
+                chunk_partial_parts.append(text_segment)
+                partial_value = " ".join(chunk_partial_parts).strip()
+                running_loop.call_soon_threadsafe(partial_text_cb, partial_value)
+
             info_duration = (
                 float(getattr(info_obj, "duration", 0.0))
                 if getattr(info_obj, "duration", None) is not None
@@ -935,6 +966,7 @@ class LocalTranscriber:
                 segments_iter,
                 duration_for_progress,
                 progress_cb,
+                _segment_text_cb,
             )
             elapsed_ms = (time.perf_counter() - started) * 1000.0
 
@@ -1097,8 +1129,9 @@ class APITranscriber:
         data: Dict[str, Any] = {
             "model": model_name,
         }
-        if options.get("language"):
-            data["language"] = options["language"]
+        language_code = sanitize_language_code(options.get("language"))
+        if language_code:
+            data["language"] = language_code
         if options.get("prompt"):
             data["prompt"] = options["prompt"]
         if options.get("response_format"):
@@ -1738,6 +1771,21 @@ class TranscriptionService:
         if stage:
             job.stage = stage
 
+    def _update_job_partial_result(self, job: TranscriptionJob, partial_text: str) -> None:
+        text = str(partial_text or "").strip()
+        if not text:
+            return
+        current = (job.result or {}).copy() if isinstance(job.result, dict) else {}
+        prev_text = str(current.get("text") or "")
+        if len(text) < len(prev_text):
+            return
+        current["text"] = text
+        current["metadata"] = {
+            **(current.get("metadata") or {}),
+            "partial": True,
+        }
+        job.result = current
+
     def _resolve_chunking_runtime(self, options: Dict[str, Any], duration_seconds: Optional[float]) -> Dict[str, Any]:
         enabled_raw = options.get("chunking_enabled")
         chunk_minutes_raw = options.get("chunk_minutes")
@@ -2000,6 +2048,7 @@ class TranscriptionService:
         options: Dict[str, Any],
         duration: Optional[float],
         progress_cb: Optional[Callable[[float], None]] = None,
+        partial_text_cb: Optional[Callable[[str], None]] = None,
     ) -> Dict[str, Any]:
         chunking = self._resolve_chunking_runtime(options, duration)
         bias_text = self._build_vocabulary_bias_text(options)
@@ -2011,6 +2060,7 @@ class TranscriptionService:
                 local_options,
                 duration_hint=duration,
                 progress_cb=progress_cb,
+                partial_text_cb=partial_text_cb,
             )
             out.setdefault("metadata", {}).setdefault(
                 "chunking",
@@ -2035,7 +2085,13 @@ class TranscriptionService:
             overlap_minutes=overlap_minutes,
         )
         if len(windows) <= 1:
-            out = await self.local.transcribe(prepared_path, local_options, duration_hint=duration, progress_cb=progress_cb)
+            out = await self.local.transcribe(
+                prepared_path,
+                local_options,
+                duration_hint=duration,
+                progress_cb=progress_cb,
+                partial_text_cb=partial_text_cb,
+            )
             out.setdefault("metadata", {}).setdefault(
                 "chunking",
                 {
@@ -2059,6 +2115,7 @@ class TranscriptionService:
         chunk_temp_paths: List[Path] = []
         total_windows = len(windows)
         try:
+            streamed_text = ""
             for idx, w in enumerate(windows):
                 if progress_cb:
                     progress_cb(round((idx / max(1, total_windows)) * 100.0, 2))
@@ -2076,6 +2133,11 @@ class TranscriptionService:
                         if progress_cb is not None
                         else None
                     ),
+                    partial_text_cb=(
+                        (lambda t, _prefix=streamed_text: partial_text_cb(f"{_prefix} {t}".strip()))
+                        if partial_text_cb is not None
+                        else None
+                    ),
                 )
                 chunk_runs.append(
                     {
@@ -2085,6 +2147,17 @@ class TranscriptionService:
                         "output": chunk_out,
                     }
                 )
+                if partial_text_cb is not None:
+                    merged_preview = self._merge_chunk_outputs(
+                        chunk_runs=chunk_runs,
+                        segment_timestamps=False,
+                        word_timestamps=False,
+                        similarity_threshold=float(self.settings.local.chunk_merge_similarity_threshold),
+                        max_word_overlap=int(self.settings.local.chunk_merge_max_word_overlap),
+                    )
+                    streamed_text = str(merged_preview.get("text") or "").strip()
+                    if streamed_text:
+                        partial_text_cb(streamed_text)
                 if progress_cb:
                     progress_cb(round(((idx + 1) / max(1, total_windows)) * 100.0, 2))
 
@@ -2206,6 +2279,7 @@ class TranscriptionService:
                         options=job.options,
                         duration=duration,
                         progress_cb=lambda p: self._update_job_progress(job, p, "transcribing"),
+                        partial_text_cb=lambda txt: self._update_job_partial_result(job, txt),
                     )
                 else:
                     out = await self.api.transcribe(job.provider, prepared_path, job.options)

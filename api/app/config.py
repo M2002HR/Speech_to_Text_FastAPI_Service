@@ -12,7 +12,7 @@ from pydantic import BaseModel, Field, ValidationError, field_validator, model_v
 
 
 class AppSection(BaseModel):
-    name: str = "Speech To Text Service"
+    name: str = "Tootak"
     version: str = "1.0.0"
     host: str = "0.0.0.0"
     port: int = 8000

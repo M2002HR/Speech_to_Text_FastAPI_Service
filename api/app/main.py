@@ -139,8 +139,13 @@ async def _require_admin(request: Request, admin_token: Optional[str] = Security
         raise HTTPException(status_code=401, detail="invalid admin token")
 
 
-@app.get("/", include_in_schema=False, summary="Web UI")
-async def ui_index() -> FileResponse:
+@app.get("/", include_in_schema=False, summary="User Web UI")
+async def ui_user_index() -> FileResponse:
+    return FileResponse(_UI_DIR / "user.html")
+
+
+@app.get("/lab", include_in_schema=False, summary="Lab Web UI")
+async def ui_lab_index() -> FileResponse:
     return FileResponse(_UI_DIR / "index.html")
 
 
