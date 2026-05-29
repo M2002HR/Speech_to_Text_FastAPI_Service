@@ -197,6 +197,31 @@ pytest -q
 pytest -q
 ```
 
+## Remote Queue Worker (Bale Bot Pipeline)
+
+This service can run a local queue worker that pulls voice jobs from the remote Bale bot server, transcribes with local model, sends text to OpenAI, and pushes final file back to the server.
+
+Run worker (Linux/macOS):
+
+```bash
+chmod +x scripts/start_queue_worker.sh
+./scripts/start_queue_worker.sh
+```
+
+Worker config lives in `.env` (see section `Remote Queue Worker (Bale Bot Integration)` in `.env.example`).
+
+If LLM requests fail intermittently with DNS errors, set `OPENAI_PROXY_URL` in `.env` and keep retry controls enabled:
+- `OPENAI_RETRY_ROUNDS` (default `3`)
+- `OPENAI_RETRY_BACKOFF_SEC` (default `1.2`)
+
+Optional auto-start via systemd:
+
+```bash
+sudo cp scripts/systemd/tootak-local-queue-worker.service /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable --now tootak-local-queue-worker.service
+```
+
 ## Configuration Priority
 
 The service loads config in this order:
