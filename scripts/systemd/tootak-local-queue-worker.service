@@ -1,0 +1,15 @@
+[Unit]
+Description=Tootak Local Queue Worker
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=/home/mhr/Code/Speech_to_Text_FastAPI_Service
+EnvironmentFile=/home/mhr/Code/Speech_to_Text_FastAPI_Service/.env
+ExecStart=/home/mhr/Code/Speech_to_Text_FastAPI_Service/.venv/bin/python -m api.app.queue_worker
+Restart=always
+RestartSec=3
+User=mhr
+
+[Install]
+WantedBy=multi-user.target
