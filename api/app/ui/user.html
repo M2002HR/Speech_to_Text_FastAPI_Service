@@ -12,7 +12,7 @@
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link rel="stylesheet" href="https://cdn-uicons.flaticon.com/uicons-regular-rounded/css/uicons-regular-rounded.css" />
   <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@500;700;800&family=Vazirmatn:wght@400;500;700&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="/ui-assets/user.css?v=20260516k" />
+  <link rel="stylesheet" href="/ui-assets/user.css?v=20260521g" />
 </head>
 <body>
   <div id="toastRoot" class="toast-root" aria-live="polite" aria-atomic="true"></div>
@@ -85,9 +85,9 @@
       </form>
     </section>
 
-    <section class="card panel output-panel">
+    <section id="outputPanel" class="card panel output-panel">
       <div class="panel-head">
-        <h2 data-i18n="panel_output">متن خروجی</h2>
+        <h2 data-i18n="panel_output">نتایج پردازش</h2>
         <div class="actions">
           <button id="btnOpenPromptModal" class="icon-btn" type="button" data-i18n-title-key="tip_prompt_modal" aria-label="Prompt helper">
             <i class="fi fi-rr-file-edit" aria-hidden="true"></i>
@@ -98,6 +98,15 @@
           <button id="btnDownloadResult" class="icon-btn" type="button" data-i18n-title-key="tip_download" aria-label="Download text">
             <i class="fi fi-rr-download" aria-hidden="true"></i>
           </button>
+        </div>
+      </div>
+      <div class="queue-box">
+        <div class="queue-head">
+          <strong data-i18n="label_queue">صف درخواست‌ها</strong>
+          <span id="queueSummary" class="chip">0</span>
+        </div>
+        <div id="jobQueueList" class="queue-list">
+          <p class="hint" data-i18n="queue_empty">هنوز درخواستی در صف نیست.</p>
         </div>
       </div>
       <pre id="transcribeResult" class="result" data-i18n="result_empty">هنوز پردازشی انجام نشده است.</pre>
@@ -121,7 +130,7 @@
       </div>
 
       <div id="settingsView" class="modal-view">
-        <div class="grid-3 compact">
+        <div class="grid-3 compact settings-grid">
           <label class="field">
             <span data-i18n="settings_model">مدل</span>
             <select id="settingModel">
@@ -142,13 +151,21 @@
             <span data-i18n="settings_overlap">اورلپ (دقیقه)</span>
             <input id="settingOverlapMinutes" type="number" min="0" step="1" />
           </label>
+
         </div>
 
-        <div class="actions">
-          <button id="btnSaveRuntimeSettings" class="icon-btn primary small" type="button" data-i18n-title-key="tip_save_settings" aria-label="Save settings">
-            <span aria-hidden="true">✓</span>
-          </button>
-          <span id="settingsSaveHint" class="hint" data-i18n="settings_hint">تنظیمات در اجرای بعدی اعمال می‌شود.</span>
+        <div class="settings-bottom-row">
+          <label class="switch-field">
+            <input id="settingOutputEnabled" type="checkbox" />
+            <span class="hint" data-i18n="settings_output_hint">نمایش باکس خروجی متن</span>
+          </label>
+
+          <div class="actions">
+            <button id="btnSaveRuntimeSettings" class="icon-btn primary small" type="button" data-i18n-title-key="tip_save_settings" aria-label="Save settings">
+              <span aria-hidden="true">✓</span>
+            </button>
+            <span id="settingsSaveHint" class="hint" data-i18n="settings_hint">تنظیمات در اجرای بعدی اعمال می‌شود.</span>
+          </div>
         </div>
 
         <div class="service-box">
@@ -220,6 +237,6 @@
     </div>
   </div>
 
-  <script src="/ui-assets/user.js?v=20260516i" defer></script>
+  <script src="/ui-assets/user.js?v=20260521f" defer></script>
 </body>
 </html>

@@ -24,6 +24,7 @@ const DEFAULT_RUNTIME_SETTINGS = {
   model: "large-v3",
   chunkMinutes: 10,
   chunkOverlapMinutes: 5,
+  outputEnabled: true,
 };
 
 const LANGUAGE_CODES = [
@@ -44,7 +45,9 @@ const I18N = {
     label_vocab: "واژگان کمکی (اختیاری)",
     placeholder_vocab: "نام‌ها، اصطلاحات و واژه‌های حساس",
     label_progress: "پیشرفت",
-    panel_output: "متن خروجی",
+    panel_output: "نتایج پردازش",
+    label_queue: "صف درخواست‌ها",
+    queue_empty: "هنوز درخواستی در صف نیست.",
     result_empty: "هنوز پردازشی انجام نشده است.",
     result_loading: "در حال آماده سازی...",
     tip_ui_lang: "تغییر زبان رابط",
@@ -67,6 +70,9 @@ const I18N = {
     status_file_missing: "فایل انتخاب نشده است.",
     status_uploading: "در حال آپلود فایل...",
     status_uploading_pct: "در حال آپلود فایل... {{percent}}%",
+    status_enqueued: "درخواست به صف اضافه شد.",
+    status_cancel_requested: "لغو درخواست در حال انجام است...",
+    status_removed_from_queue: "درخواست از صف حذف شد.",
     status_job_started: "پردازش شروع شد.",
     status_running: "در حال پردازش...",
     status_queued: "در صف پردازش...",
@@ -100,12 +106,21 @@ const I18N = {
     stage_completed: "تکمیل",
     stage_failed: "خطا",
     stage_cancelled: "لغو",
+    queue_status_waiting: "منتظر اجرا",
+    queue_status_uploading: "آپلود",
+    queue_status_pending: "در صف پردازش",
+    queue_status_running: "در حال پردازش",
+    queue_status_completed: "تکمیل",
+    queue_status_failed: "ناموفق",
+    queue_status_cancelled: "لغو",
+    queue_remove: "حذف از صف",
     settings_title: "تنظیمات",
     settings_tab: "تنظیمات",
     about_tab: "درباره ما",
     settings_model: "مدل",
     settings_chunk: "چانک (دقیقه)",
     settings_overlap: "اورلپ (دقیقه)",
+    settings_output_hint: "نمایش باکس خروجی متن",
     settings_hint: "تنظیمات در اجرای بعدی اعمال می‌شود.",
     settings_service_title: "وضعیت سرویس",
     about_title: "درباره Tootak",
@@ -139,7 +154,9 @@ const I18N = {
     label_vocab: "Vocabulary bias (optional)",
     placeholder_vocab: "Names, terms, and sensitive words",
     label_progress: "Progress",
-    panel_output: "Output text",
+    panel_output: "Processing results",
+    label_queue: "Request queue",
+    queue_empty: "No requests in queue yet.",
     result_empty: "No transcription yet.",
     result_loading: "Preparing...",
     tip_ui_lang: "Switch UI language",
@@ -162,6 +179,9 @@ const I18N = {
     status_file_missing: "No file selected.",
     status_uploading: "Uploading file...",
     status_uploading_pct: "Uploading file... {{percent}}%",
+    status_enqueued: "Request added to queue.",
+    status_cancel_requested: "Cancelling request...",
+    status_removed_from_queue: "Request removed from queue.",
     status_job_started: "Job created. Processing started.",
     status_running: "Processing...",
     status_queued: "Queued...",
@@ -195,12 +215,21 @@ const I18N = {
     stage_completed: "completed",
     stage_failed: "failed",
     stage_cancelled: "cancelled",
+    queue_status_waiting: "waiting",
+    queue_status_uploading: "uploading",
+    queue_status_pending: "queued",
+    queue_status_running: "processing",
+    queue_status_completed: "completed",
+    queue_status_failed: "failed",
+    queue_status_cancelled: "cancelled",
+    queue_remove: "Remove from queue",
     settings_title: "Settings",
     settings_tab: "Settings",
     about_tab: "About",
     settings_model: "Model",
     settings_chunk: "Chunk (min)",
     settings_overlap: "Overlap (min)",
+    settings_output_hint: "Show transcription output panel",
     settings_hint: "Settings will be used in the next run.",
     settings_service_title: "Service status",
     about_title: "About Tootak",
@@ -241,12 +270,15 @@ const els = {
   vocabularyBiasInput: $("vocabularyBiasInput"),
   btnTranscribe: $("btnTranscribe"),
   transcribeStatus: $("transcribeStatus"),
+  outputPanel: $("outputPanel"),
   transcribeResult: $("transcribeResult"),
   transcribePercent: $("transcribePercent"),
   transcribeProgressBar: $("transcribeProgressBar"),
   transcribeJobMeta: $("transcribeJobMeta"),
   btnCopyText: $("btnCopyText"),
   btnDownloadResult: $("btnDownloadResult"),
+  queueSummary: $("queueSummary"),
+  jobQueueList: $("jobQueueList"),
 
   btnOpenPromptModal: $("btnOpenPromptModal"),
   promptModal: $("promptModal"),
@@ -267,6 +299,7 @@ const els = {
   settingModel: $("settingModel"),
   settingChunkMinutes: $("settingChunkMinutes"),
   settingOverlapMinutes: $("settingOverlapMinutes"),
+  settingOutputEnabled: $("settingOutputEnabled"),
   btnSaveRuntimeSettings: $("btnSaveRuntimeSettings"),
   settingsSaveHint: $("settingsSaveHint"),
 
@@ -280,9 +313,13 @@ const state = {
   latestText: "",
   latestResult: null,
   currentJobId: "-",
-  pollHandle: null,
   currentProgress: 0,
   currentStage: "queued",
+  queueItems: [],
+  queueCounter: 0,
+  queueRunnerActive: false,
+  activeQueueLocalId: null,
+  selectedQueueLocalId: null,
   uiLang: "fa",
   status: {
     raw: false,
@@ -404,7 +441,8 @@ function applyUiLanguage(lang) {
   applyI18nText();
   initLanguageSelect();
   updatePromptTemplate();
-  setProgress(state.currentProgress, state.currentStage, state.currentJobId);
+  renderQueueList();
+  syncSelectedOutput({ animate: false });
   renderStatus();
 }
 
@@ -478,6 +516,155 @@ function stageLabel(stage) {
   const key = `stage_${normalized}`;
   const translated = t(key);
   return translated === key ? String(stage) : translated;
+}
+
+function queueStatusLabel(status) {
+  const key = `queue_status_${String(status || "").trim().toLowerCase()}`;
+  const translated = t(key);
+  return translated === key ? String(status || "-") : translated;
+}
+
+function getSelectedQueueItem() {
+  if (!state.selectedQueueLocalId) return null;
+  return state.queueItems.find((x) => x.localId === state.selectedQueueLocalId) || null;
+}
+
+function isInFlightStatus(status) {
+  return ["uploading", "pending", "running"].includes(String(status || "").toLowerCase());
+}
+
+function renderQueueList() {
+  if (!els.jobQueueList) return;
+
+  if (els.queueSummary) {
+    const completed = state.queueItems.filter((x) => x.status === "completed").length;
+    els.queueSummary.textContent = `${completed}/${state.queueItems.length}`;
+  }
+
+  els.jobQueueList.innerHTML = "";
+  if (!state.queueItems.length) {
+    const empty = document.createElement("p");
+    empty.className = "hint";
+    empty.textContent = t("queue_empty");
+    els.jobQueueList.appendChild(empty);
+    return;
+  }
+
+  state.queueItems.forEach((item) => {
+    const row = document.createElement("button");
+    row.type = "button";
+    row.className = `queue-item${item.localId === state.selectedQueueLocalId ? " active" : ""}`;
+    row.dataset.localId = item.localId;
+
+    const title = document.createElement("span");
+    title.className = "queue-item-title";
+    title.textContent = item.sourceFilename;
+
+    const removeBtn = document.createElement("button");
+    removeBtn.type = "button";
+    removeBtn.className = "queue-item-delete";
+    removeBtn.setAttribute("aria-label", t("queue_remove"));
+    removeBtn.setAttribute("title", t("queue_remove"));
+    removeBtn.setAttribute("data-tooltip", t("queue_remove"));
+    removeBtn.setAttribute("data-local-id", item.localId);
+    removeBtn.textContent = "×";
+
+    const meta = document.createElement("span");
+    meta.className = "queue-item-meta";
+    const shortJob = item.jobId ? String(item.jobId).slice(0, 8) : "-";
+    const stage = stageLabel(item.stage || "-");
+    meta.textContent = `${queueStatusLabel(item.status)} · ${Number(item.progressPercent || 0).toFixed(1)}% · ${t("job_label")}: ${shortJob} · ${t("stage_label")}: ${stage}`;
+
+    row.appendChild(title);
+    row.appendChild(removeBtn);
+    row.appendChild(meta);
+    els.jobQueueList.appendChild(row);
+  });
+}
+
+function syncSelectedOutput({ animate = false } = {}) {
+  const item = getSelectedQueueItem();
+  if (!item) {
+    resetStream();
+    state.latestText = "";
+    state.latestResult = null;
+    setProgress(0, "queued", "-");
+    if (els.transcribeResult) {
+      els.transcribeResult.textContent = t("result_empty");
+    }
+    return;
+  }
+
+  state.latestText = String(item.latestText || "");
+  state.latestResult = item.result || null;
+  setProgress(Number(item.progressPercent || 0), item.stage || "queued", item.jobId || "-");
+
+  if (item.status === "failed" || item.status === "cancelled") {
+    resetStream();
+    if (els.transcribeResult) {
+      els.transcribeResult.textContent = `${t("error_prefix")}: ${item.error || item.status}`;
+    }
+    return;
+  }
+
+  if (!state.latestText.trim()) {
+    resetStream();
+    if (els.transcribeResult) {
+      const shouldShowPreparing = ["waiting", "uploading", "pending", "running"].includes(item.status);
+      els.transcribeResult.textContent = shouldShowPreparing ? t("result_loading") : t("result_empty");
+    }
+    return;
+  }
+
+  setStreamTarget(state.latestText, { immediate: !animate });
+}
+
+function setSelectedQueueItem(localId, { animate = false } = {}) {
+  state.selectedQueueLocalId = localId || null;
+  renderQueueList();
+  syncSelectedOutput({ animate });
+}
+
+function removeQueueItem(localId) {
+  const idx = state.queueItems.findIndex((x) => x.localId === localId);
+  if (idx < 0) return;
+
+  const item = state.queueItems[idx];
+  const inFlight = isInFlightStatus(item.status);
+  item.cancelRequested = true;
+
+  if (typeof item.uploadAbort === "function") {
+    try {
+      item.uploadAbort();
+    } catch {
+      // noop
+    }
+  }
+
+  if (inFlight && item.jobId) {
+    apiFetch(`/transcribe/jobs/${item.jobId}/cancel`, { method: "POST", timeoutMs: 10000 }).catch(() => null);
+  }
+
+  state.queueItems.splice(idx, 1);
+
+  if (state.selectedQueueLocalId === localId) {
+    const replacement = state.queueItems[idx] || state.queueItems[idx - 1] || null;
+    setSelectedQueueItem(replacement?.localId || null, { animate: false });
+  } else {
+    renderQueueList();
+  }
+
+  if (!state.queueItems.length) {
+    syncSelectedOutput({ animate: false });
+  }
+
+  if (inFlight) {
+    setStatusByKey("status_cancel_requested", "warn");
+    toastByKey("status_cancel_requested", "info");
+  } else {
+    setStatusByKey("status_removed_from_queue", "ok");
+    toastByKey("status_removed_from_queue", "success");
+  }
 }
 
 function updateProgressUi(value) {
@@ -640,10 +827,16 @@ function loadRuntimeSettings() {
     const parsed = JSON.parse(raw);
     const chunkMinutes = Number(parsed.chunkMinutes);
     const overlapMinutes = Number(parsed.chunkOverlapMinutes);
+    const outputEnabled = typeof parsed.outputEnabled === "boolean"
+      ? parsed.outputEnabled
+      : typeof parsed.streamEnabled === "boolean"
+        ? parsed.streamEnabled
+        : DEFAULT_RUNTIME_SETTINGS.outputEnabled;
     state.runtimeSettings = {
       model: String(parsed.model || DEFAULT_RUNTIME_SETTINGS.model),
       chunkMinutes: Number.isFinite(chunkMinutes) && chunkMinutes > 0 ? chunkMinutes : DEFAULT_RUNTIME_SETTINGS.chunkMinutes,
       chunkOverlapMinutes: Number.isFinite(overlapMinutes) && overlapMinutes >= 0 ? overlapMinutes : DEFAULT_RUNTIME_SETTINGS.chunkOverlapMinutes,
+      outputEnabled,
     };
   } catch {
     state.runtimeSettings = { ...DEFAULT_RUNTIME_SETTINGS };
@@ -654,12 +847,21 @@ function renderRuntimeSettings() {
   if (els.settingModel) els.settingModel.value = state.runtimeSettings.model;
   if (els.settingChunkMinutes) els.settingChunkMinutes.value = String(state.runtimeSettings.chunkMinutes);
   if (els.settingOverlapMinutes) els.settingOverlapMinutes.value = String(state.runtimeSettings.chunkOverlapMinutes);
+  if (els.settingOutputEnabled) els.settingOutputEnabled.checked = state.runtimeSettings.outputEnabled !== false;
+}
+
+function applyOutputVisibility() {
+  const outputEnabled = state.runtimeSettings.outputEnabled !== false;
+  if (els.outputPanel) {
+    els.outputPanel.classList.toggle("output-hidden", !outputEnabled);
+  }
 }
 
 function saveRuntimeSettingsFromInputs() {
   const model = String(els.settingModel?.value || "").trim() || DEFAULT_RUNTIME_SETTINGS.model;
   const chunkMinutes = Number(els.settingChunkMinutes?.value);
   const overlapMinutes = Number(els.settingOverlapMinutes?.value);
+  const outputEnabled = Boolean(els.settingOutputEnabled?.checked);
 
   if (!Number.isFinite(chunkMinutes) || chunkMinutes <= 0 || !Number.isFinite(overlapMinutes) || overlapMinutes < 0) {
     setStatusByKey("status_settings_invalid_number", "bad");
@@ -677,9 +879,12 @@ function saveRuntimeSettingsFromInputs() {
     model,
     chunkMinutes,
     chunkOverlapMinutes: overlapMinutes,
+    outputEnabled,
   };
 
   localStorage.setItem(RUNTIME_SETTINGS_KEY, JSON.stringify(state.runtimeSettings));
+  applyOutputVisibility();
+  syncSelectedOutput({ animate: true });
   setStatusByKey("status_settings_saved", "ok");
   toastByKey("status_settings_saved", "success");
   return true;
@@ -846,11 +1051,14 @@ async function apiFetch(path, { method = "GET", body, timeoutMs = 15000 } = {}) 
   return data;
 }
 
-function createTranscribeJobWithProgress(formData, onUploadProgress) {
+function createTranscribeJobWithProgress(formData, onUploadProgress, onAbortReady) {
   return new Promise((resolve, reject) => {
     const xhr = new XMLHttpRequest();
     xhr.open("POST", "/transcribe/jobs", true);
     xhr.timeout = 30 * 60 * 1000;
+    if (onAbortReady) {
+      onAbortReady(() => xhr.abort());
+    }
 
     xhr.upload.onprogress = (evt) => {
       if (!evt.lengthComputable) return;
@@ -875,6 +1083,7 @@ function createTranscribeJobWithProgress(formData, onUploadProgress) {
     };
 
     xhr.onerror = () => reject(new Error("network error while creating transcription job"));
+    xhr.onabort = () => reject(new Error("upload cancelled"));
     xhr.ontimeout = () => reject(new Error("upload timeout while creating transcription job"));
     xhr.send(formData);
   });
@@ -887,61 +1096,172 @@ function appendIf(form, key, value) {
   form.append(key, v);
 }
 
-function stopPolling() {
-  if (state.pollHandle) {
-    clearInterval(state.pollHandle);
-    state.pollHandle = null;
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function buildFormFromQueueItem(item) {
+  const form = new FormData();
+  form.append("file", item.file);
+
+  Object.entries(item.profile).forEach(([key, value]) => {
+    if (typeof value === "boolean") {
+      form.append(key, String(value));
+      return;
+    }
+    appendIf(form, key, value);
+  });
+
+  appendIf(form, "language", item.language || "");
+  appendIf(form, "vocabulary_bias", item.vocabularyBias || "");
+  return form;
+}
+
+async function runQueueItem(item) {
+  if (item.cancelRequested) return;
+
+  item.status = "uploading";
+  item.stage = "uploading";
+  item.progressPercent = 0;
+  item.error = "";
+  item.latestText = "";
+  item.result = null;
+  item.cancelSignalSent = false;
+  item.uploadAbort = null;
+
+  setSelectedQueueItem(item.localId, { animate: false });
+  setStatusByKey("status_uploading", "warn");
+  renderQueueList();
+
+  try {
+    const form = buildFormFromQueueItem(item);
+    const created = await createTranscribeJobWithProgress(
+      form,
+      (uploadPercent) => {
+        item.status = "uploading";
+        item.stage = "uploading";
+        item.progressPercent = uploadPercent;
+        renderQueueList();
+        if (state.selectedQueueLocalId === item.localId) {
+          setProgress(uploadPercent, "uploading", "-");
+        }
+        setStatusByKey("status_uploading_pct", "warn", { percent: uploadPercent.toFixed(1) });
+      },
+      (abortFn) => {
+        item.uploadAbort = abortFn;
+      }
+    );
+
+    item.uploadAbort = null;
+    item.jobId = created.job_id;
+    item.status = created.status === "running" ? "running" : "pending";
+    item.stage = created.stage || "queued";
+    item.progressPercent = Number(created.progress_percent || 0);
+    renderQueueList();
+    if (state.selectedQueueLocalId === item.localId) {
+      syncSelectedOutput({ animate: false });
+    }
+    setStatusByKey("status_job_started", "warn");
+
+    while (true) {
+      if (item.cancelRequested && item.jobId && !item.cancelSignalSent) {
+        item.cancelSignalSent = true;
+        await apiFetch(`/transcribe/jobs/${item.jobId}/cancel`, { method: "POST", timeoutMs: 10000 }).catch(() => null);
+      }
+
+      const job = await apiFetch(`/transcribe/jobs/${item.jobId}`);
+      item.status = String(job.status || item.status || "").toLowerCase();
+      item.stage = job.stage || item.stage || "-";
+      item.progressPercent = Number(job.progress_percent || 0);
+
+      if (job.result && typeof job.result === "object") {
+        item.result = job.result;
+        const partialText = String(job.result.text || "");
+        if (partialText && partialText.length >= item.latestText.length) {
+          item.latestText = partialText;
+        }
+      }
+
+      renderQueueList();
+      if (state.selectedQueueLocalId === item.localId) {
+        syncSelectedOutput({ animate: true });
+      }
+
+      if (item.status === "completed") {
+        item.progressPercent = 100;
+        item.stage = "completed";
+        if (item.result && typeof item.result === "object") {
+          item.latestText = String(item.result.text || item.latestText || "");
+        }
+        renderQueueList();
+        if (state.selectedQueueLocalId === item.localId) {
+          state.stream.charsPerSec = Math.min(320, Math.max(state.stream.charsPerSec, 120));
+          syncSelectedOutput({ animate: true });
+        }
+        if (!item.cancelRequested) {
+          setStatusByKey("status_success", "ok");
+          toastByKey("status_success", "success");
+        }
+        break;
+      }
+
+      if (item.status === "failed" || item.status === "cancelled") {
+        item.error = job.error || item.status;
+        renderQueueList();
+        if (state.selectedQueueLocalId === item.localId) {
+          syncSelectedOutput({ animate: false });
+        }
+        if (!item.cancelRequested) {
+          setStatusByKey("status_failed", "bad");
+          toastByKey("status_failed", "error");
+        }
+        break;
+      }
+
+      if (item.status === "pending") {
+        setStatusByKey("status_queued", "warn");
+      } else if (item.status === "running") {
+        setStatusByKey("status_running", "warn");
+      }
+
+      await sleep(1200);
+    }
+  } catch (err) {
+    if (item.cancelRequested) {
+      return;
+    }
+    item.status = "failed";
+    item.stage = "failed";
+    item.error = err.message || String(err);
+    renderQueueList();
+    if (state.selectedQueueLocalId === item.localId) {
+      syncSelectedOutput({ animate: false });
+    }
+    setStatusByKey("status_failed_start", "bad");
+    toastByKey("status_failed_start", "error");
   }
 }
 
-function startPolling(jobId) {
-  stopPolling();
+async function processQueue() {
+  if (state.queueRunnerActive) return;
+  state.queueRunnerActive = true;
 
-  state.pollHandle = setInterval(async () => {
-    try {
-      const job = await apiFetch(`/transcribe/jobs/${jobId}`);
-      setProgress(Number(job.progress_percent || 0), job.stage || "-", job.job_id);
-
-      const partialText = String(job?.result?.text || "");
-      if (partialText && partialText.length >= state.stream.target.length) {
-        setStreamTarget(partialText, { immediate: false });
-      }
-
-      if (job.status === "completed") {
-        stopPolling();
-        if (job.result && typeof job.result === "object") {
-          state.stream.charsPerSec = Math.min(320, Math.max(state.stream.charsPerSec, 120));
-          setStreamTarget(String(job.result.text || ""), { immediate: false });
-          state.latestResult = job.result;
-        }
-        setStatusByKey("status_success", "ok");
-        toastByKey("status_success", "success");
-        return;
-      }
-
-      if (job.status === "failed" || job.status === "cancelled") {
-        stopPolling();
-        const err = job.error || job.status;
-        resetStream();
-        if (els.transcribeResult) {
-          els.transcribeResult.textContent = `${t("error_prefix")}: ${err}`;
-        }
-        setStatusByKey("status_failed", "bad");
-        toastByKey("status_failed", "error");
-        return;
-      }
-
-      if (job.status === "pending") {
-        setStatusByKey("status_queued", "warn");
-      } else if (job.status === "running") {
-        setStatusByKey("status_running", "warn");
-      }
-    } catch (err) {
-      stopPolling();
-      setStatusByKey("status_poll_error", "bad", { msg: err.message });
-      toastByKey("status_poll_error", "error", { msg: err.message }, 4200);
+  try {
+    while (true) {
+      const next = state.queueItems.find((x) => x.status === "waiting");
+      if (!next) break;
+      state.activeQueueLocalId = next.localId;
+      await runQueueItem(next);
+      state.activeQueueLocalId = null;
     }
-  }, 1200);
+  } finally {
+    state.queueRunnerActive = false;
+    state.activeQueueLocalId = null;
+    if (!state.queueItems.some((x) => ["waiting", "uploading", "pending", "running"].includes(x.status))) {
+      setStatusByKey("status_ready", "ok");
+    }
+    renderQueueList();
+  }
 }
 
 async function transcribeHandler(event) {
@@ -953,54 +1273,46 @@ async function transcribeHandler(event) {
     return;
   }
 
-  resetStream();
-  state.latestText = "";
-  state.latestResult = null;
-  if (els.transcribeResult) {
-    els.transcribeResult.textContent = t("result_loading");
-  }
-  setProgress(0, "uploading", "-");
-  setStatusByKey("status_uploading", "warn");
-
-  const form = new FormData();
-  form.append("file", file);
-
   const profile = buildTranscribeProfile();
-  Object.entries(profile).forEach(([key, value]) => {
-    if (typeof value === "boolean") {
-      form.append(key, String(value));
-      return;
-    }
-    appendIf(form, key, value);
-  });
-
   const language = (els.languageSelect?.value || "").trim();
-  if (language) {
-    form.append("language", language);
-  }
+  const vocabularyBias = String(els.vocabularyBiasInput?.value || "");
   localStorage.setItem(TRANSCRIBE_LANG_KEY, language);
 
-  appendIf(form, "vocabulary_bias", els.vocabularyBiasInput.value || "");
+  state.queueCounter += 1;
+  const item = {
+    localId: `q-${Date.now()}-${state.queueCounter}`,
+    sourceFilename: file.name || `file-${state.queueCounter}`,
+    file,
+    profile,
+    language,
+    vocabularyBias,
+    status: "waiting",
+    stage: "queued",
+    progressPercent: 0,
+    latestText: "",
+    result: null,
+    error: "",
+    jobId: "",
+    cancelRequested: false,
+    cancelSignalSent: false,
+    uploadAbort: null,
+    createdAt: Date.now(),
+  };
 
-  try {
-    const job = await createTranscribeJobWithProgress(form, (uploadPercent) => {
-      setProgress(uploadPercent, "uploading", "-");
-      setStatusByKey("status_uploading_pct", "warn", { percent: uploadPercent.toFixed(1) });
-    });
+  state.queueItems.push(item);
+  setSelectedQueueItem(item.localId, { animate: false });
+  setStatusByKey("status_enqueued", "ok");
+  toastByKey("status_enqueued", "success");
 
-    state.currentJobId = job.job_id;
-    setProgress(Number(job.progress_percent || 0), job.stage || "queued", job.job_id);
-    setStatusByKey("status_job_started", "warn");
-    startPolling(job.job_id);
-  } catch (err) {
-    resetStream();
-    if (els.transcribeResult) {
-      els.transcribeResult.textContent = `${t("error_prefix")}: ${err.message}`;
-    }
+  if (els.fileInput) {
+    els.fileInput.value = "";
+  }
+
+  processQueue().catch((err) => {
     setStatusByKey("status_failed_start", "bad");
     toastByKey("status_failed_start", "error");
-    setProgress(0, "failed", "-");
-  }
+    showToast(`${t("error_prefix")}: ${err.message}`, "error", 4200);
+  });
 }
 
 function copyTextHandler() {
@@ -1033,11 +1345,14 @@ function downloadResultHandler() {
 
   const blob = new Blob([text], { type: "text/plain;charset=utf-8" });
   const url = URL.createObjectURL(blob);
-  const stamp = new Date().toISOString().replace(/[:.]/g, "-");
+  const selected = getSelectedQueueItem();
+  const baseName = selected?.sourceFilename
+    ? String(selected.sourceFilename).replace(/\.[a-z0-9]+$/i, "")
+    : "";
 
   const link = document.createElement("a");
   link.href = url;
-  link.download = `transcription-${stamp}.txt`;
+  link.download = baseName ? `${baseName}-transcription.txt` : "transcription.txt";
   document.body.appendChild(link);
   link.click();
   link.remove();
@@ -1102,6 +1417,22 @@ function attachEvents() {
   els.transcribeForm?.addEventListener("submit", transcribeHandler);
   els.btnCopyText?.addEventListener("click", copyTextHandler);
   els.btnDownloadResult?.addEventListener("click", downloadResultHandler);
+  els.jobQueueList?.addEventListener("click", (event) => {
+    const target = event.target instanceof Element ? event.target : null;
+    if (!target) return;
+    const deleteBtn = target.closest(".queue-item-delete");
+    if (deleteBtn) {
+      const localId = deleteBtn.getAttribute("data-local-id");
+      if (!localId) return;
+      removeQueueItem(localId);
+      return;
+    }
+    const row = target.closest(".queue-item");
+    if (!row) return;
+    const localId = row.getAttribute("data-local-id");
+    if (!localId) return;
+    setSelectedQueueItem(localId, { animate: false });
+  });
 
   els.btnOpenPromptModal?.addEventListener("click", () => {
     updatePromptTemplate();
@@ -1130,10 +1461,12 @@ async function init() {
     els.promptLanguageSelect.value = state.uiLang === "en" ? "en" : "fa";
   }
   renderRuntimeSettings();
+  applyOutputVisibility();
   updatePromptTemplate();
   attachEvents();
 
-  setProgress(0, "queued", "-");
+  renderQueueList();
+  syncSelectedOutput({ animate: false });
   await loadHealth();
   setStatusByKey("status_ready", "ok");
 }
