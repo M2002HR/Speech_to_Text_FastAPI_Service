@@ -773,9 +773,12 @@ class LocalTranscriber:
         duration_for_progress: Optional[float],
         progress_cb: Optional[Callable[[float], None]],
         segment_text_cb: Optional[Callable[[str], None]] = None,
+        cancel_check: Optional[Callable[[], bool]] = None,
     ) -> List[Any]:
         segments_raw: List[Any] = []
         for seg in segments_iter:
+            if cancel_check is not None and cancel_check():
+                raise asyncio.CancelledError("transcription job cancelled")
             segments_raw.append(seg)
             if segment_text_cb is not None:
                 try:
@@ -799,7 +802,10 @@ class LocalTranscriber:
         duration_hint: Optional[float] = None,
         progress_cb: Optional[Callable[[float], None]] = None,
         partial_text_cb: Optional[Callable[[str], None]] = None,
+        cancel_event: Optional[asyncio.Event] = None,
     ) -> Dict[str, Any]:
+        if cancel_event is not None and cancel_event.is_set():
+            raise asyncio.CancelledError("transcription job cancelled")
         requested_model_id = str(options.get("model") or self.settings.local.model_id)
         resolved_model_id = self._resolve_model_id(requested_model_id)
         model = await self._get_model(requested_model_id)
@@ -967,6 +973,7 @@ class LocalTranscriber:
                 duration_for_progress,
                 progress_cb,
                 _segment_text_cb,
+                (lambda: bool(cancel_event and cancel_event.is_set())),
             )
             elapsed_ms = (time.perf_counter() - started) * 1000.0
 
@@ -1766,6 +1773,13 @@ class TranscriptionService:
     def list_transcription_jobs(self) -> List[TranscriptionJob]:
         return sorted(self.jobs.values(), key=lambda x: x.created_at, reverse=True)
 
+    def cancel_transcription_job(self, job_id: str) -> TranscriptionJob:
+        job = self.get_transcription_job(job_id)
+        if job.status in {"completed", "failed", "cancelled"}:
+            return job
+        job.cancel_event.set()
+        return job
+
     def _update_job_progress(self, job: TranscriptionJob, percent: float, stage: Optional[str] = None) -> None:
         job.progress_percent = max(job.progress_percent, min(100.0, float(percent)))
         if stage:
@@ -2049,7 +2063,13 @@ class TranscriptionService:
         duration: Optional[float],
         progress_cb: Optional[Callable[[float], None]] = None,
         partial_text_cb: Optional[Callable[[str], None]] = None,
+        cancel_event: Optional[asyncio.Event] = None,
     ) -> Dict[str, Any]:
+        def _ensure_not_cancelled() -> None:
+            if cancel_event is not None and cancel_event.is_set():
+                raise asyncio.CancelledError("transcription job cancelled")
+
+        _ensure_not_cancelled()
         chunking = self._resolve_chunking_runtime(options, duration)
         bias_text = self._build_vocabulary_bias_text(options)
         local_options = self._apply_vocabulary_bias(options, bias_text)
@@ -2061,6 +2081,7 @@ class TranscriptionService:
                 duration_hint=duration,
                 progress_cb=progress_cb,
                 partial_text_cb=partial_text_cb,
+                cancel_event=cancel_event,
             )
             out.setdefault("metadata", {}).setdefault(
                 "chunking",
@@ -2091,6 +2112,7 @@ class TranscriptionService:
                 duration_hint=duration,
                 progress_cb=progress_cb,
                 partial_text_cb=partial_text_cb,
+                cancel_event=cancel_event,
             )
             out.setdefault("metadata", {}).setdefault(
                 "chunking",
@@ -2117,6 +2139,7 @@ class TranscriptionService:
         try:
             streamed_text = ""
             for idx, w in enumerate(windows):
+                _ensure_not_cancelled()
                 if progress_cb:
                     progress_cb(round((idx / max(1, total_windows)) * 100.0, 2))
                 chunk_path = await self.media.extract_audio_window(prepared_path, float(w["start"]), float(w["end"]))
@@ -2138,6 +2161,7 @@ class TranscriptionService:
                         if partial_text_cb is not None
                         else None
                     ),
+                    cancel_event=cancel_event,
                 )
                 chunk_runs.append(
                     {
@@ -2161,6 +2185,7 @@ class TranscriptionService:
                 if progress_cb:
                     progress_cb(round(((idx + 1) / max(1, total_windows)) * 100.0, 2))
 
+            _ensure_not_cancelled()
             merged = self._merge_chunk_outputs(
                 chunk_runs=chunk_runs,
                 segment_timestamps=(
@@ -2256,6 +2281,7 @@ class TranscriptionService:
         async with self._job_sem:
             if job.cancel_event.is_set():
                 job.status = "cancelled"
+                job.stage = "cancelled"
                 job.completed_at = now_utc()
                 return
 
@@ -2270,7 +2296,11 @@ class TranscriptionService:
 
                 self._update_job_progress(job, 0, "preparing-audio")
                 prepared_path = await self.media.extract_audio(job.raw_path, job.source_filename, job.source_content_type)
+                if job.cancel_event.is_set():
+                    raise asyncio.CancelledError("transcription job cancelled")
                 duration = await self.media.probe_duration(prepared_path)
+                if job.cancel_event.is_set():
+                    raise asyncio.CancelledError("transcription job cancelled")
                 self._update_job_progress(job, 0, "loading-model")
 
                 if job.provider == "local":
@@ -2280,9 +2310,14 @@ class TranscriptionService:
                         duration=duration,
                         progress_cb=lambda p: self._update_job_progress(job, p, "transcribing"),
                         partial_text_cb=lambda txt: self._update_job_partial_result(job, txt),
+                        cancel_event=job.cancel_event,
                     )
                 else:
+                    if job.cancel_event.is_set():
+                        raise asyncio.CancelledError("transcription job cancelled")
                     out = await self.api.transcribe(job.provider, prepared_path, job.options)
+                    if job.cancel_event.is_set():
+                        raise asyncio.CancelledError("transcription job cancelled")
                     self._update_job_progress(job, 0, "finalizing")
 
                 meta = out.setdefault("metadata", {})
@@ -2300,6 +2335,11 @@ class TranscriptionService:
                 job.result = out
                 job.status = "completed"
                 self._update_job_progress(job, 100, "completed")
+                job.completed_at = now_utc()
+            except asyncio.CancelledError:
+                job.status = "cancelled"
+                job.error = None
+                job.stage = "cancelled"
                 job.completed_at = now_utc()
             except Exception as exc:
                 job.status = "failed"

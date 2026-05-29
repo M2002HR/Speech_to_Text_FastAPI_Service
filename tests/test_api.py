@@ -143,6 +143,23 @@ def test_transcribe_job_endpoints_mocked(client_factory) -> None:
             }
         })()
         svc.list_transcription_jobs = lambda: [svc.get_transcription_job("trjob1")]  # type: ignore[assignment]
+        svc.cancel_transcription_job = lambda job_id: type("X", (), {  # type: ignore[assignment]
+            "to_dict": lambda self: {
+                "job_id": job_id,
+                "status": "cancelled",
+                "provider": "local",
+                "model": "tiny",
+                "source_filename": "a.wav",
+                "source_content_type": "audio/wav",
+                "created_at": "2026-01-01T00:00:00Z",
+                "started_at": "2026-01-01T00:00:01Z",
+                "completed_at": "2026-01-01T00:00:05Z",
+                "progress_percent": 70.0,
+                "stage": "cancelled",
+                "error": None,
+                "result": None,
+            }
+        })()
 
         files = {"file": ("a.wav", b"RIFFfake", "audio/wav")}
         created = client.post("/transcribe/jobs", files=files, data={"provider": "local", "model": "tiny"})
@@ -156,6 +173,10 @@ def test_transcribe_job_endpoints_mocked(client_factory) -> None:
         fetched = client.get("/transcribe/jobs/trjob1")
         assert fetched.status_code == 200
         assert fetched.json()["status"] == "completed"
+
+        cancelled = client.post("/transcribe/jobs/trjob1/cancel")
+        assert cancelled.status_code == 200
+        assert cancelled.json()["status"] == "cancelled"
 
 
 def test_admin_download_create_with_hf_source(client_factory) -> None:

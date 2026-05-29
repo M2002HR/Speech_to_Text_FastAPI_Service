@@ -384,6 +384,17 @@ async def transcribe_job_get(request: Request, job_id: str) -> Dict[str, Any]:
     return job.to_dict()
 
 
+@app.post(
+    "/transcribe/jobs/{job_id}/cancel",
+    response_model=TranscriptionJobResponse,
+    tags=["transcription"],
+    summary="Cancel async transcription job",
+)
+async def transcribe_job_cancel(request: Request, job_id: str) -> Dict[str, Any]:
+    job = request.app.state.services.transcription.cancel_transcription_job(job_id)
+    return job.to_dict()
+
+
 @app.get(
     "/admin/system/config-effective",
     response_model=EffectiveConfigResponse,
