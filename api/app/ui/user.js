@@ -1574,16 +1574,7 @@ async function runQueueItem(item) {
     const form = buildFormFromQueueItem(item);
     const created = await createTranscribeJobWithProgress(
       form,
-      (uploadPercent) => {
-        item.status = "uploading";
-        item.stage = "uploading";
-        item.progressPercent = uploadPercent;
-        renderQueueList();
-        if (state.selectedQueueLocalId === item.localId) {
-          setProgress(uploadPercent, "uploading", "-");
-        }
-        setStatusByKey("status_uploading_pct", "warn", { percent: uploadPercent.toFixed(1) });
-      },
+      null,
       (abortFn) => {
         item.uploadAbort = abortFn;
       }
