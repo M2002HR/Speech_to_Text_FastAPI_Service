@@ -4,7 +4,7 @@ import os
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 import yaml
 from fastapi import Depends, FastAPI, File, Form, Header, HTTPException, Request, Security, UploadFile
@@ -12,7 +12,7 @@ from fastapi.responses import FileResponse
 from fastapi.security import APIKeyHeader
 from fastapi.staticfiles import StaticFiles
 
-from .config import Settings, get_settings, load_settings
+from .config import ProviderSection, Settings, get_settings, load_settings
 from .schemas import (
     DownloadBatchResponse,
     EditableConfigResponse,
@@ -31,11 +31,23 @@ from .schemas import (
     ModelUrlResponse,
     ProviderInfo,
     ProvidersResponse,
+    ProviderRuntimeStatusResponse,
     TranscriptionJobListResponse,
     TranscriptionJobResponse,
     TranscriptionResponse,
+    UserLocalModelDownloadRequest,
+    UserLocalModelStatusResponse,
 )
-from .services import MODEL_PRESETS, ServiceContainer, now_utc
+from .services import (
+    MODEL_PRESETS,
+    VARIANT_TO_LOCAL_DIR_ALIASES,
+    WHISPER_VARIANT_METADATA,
+    ServiceContainer,
+    canonicalize_faster_whisper_model_id,
+    detect_whisper_variant,
+    normalize_model_token,
+    now_utc,
+)
 
 _RUNTIME_SETTINGS = get_settings()
 _DOCS_ENABLED = bool(_RUNTIME_SETTINGS.app.enable_docs)
@@ -102,6 +114,69 @@ def _redacted_config(settings: Settings) -> Dict[str, Any]:
     data["providers"]["custom"]["api_key"] = _mask_secret(data["providers"]["custom"].get("api_key", ""))
     data["admin"]["token"] = _mask_secret(data["admin"].get("token", ""))
     return data
+
+
+def _models_url_for_provider(base_url: str) -> str:
+    base = str(base_url or "").rstrip("/")
+    if base.endswith("/v1"):
+        return f"{base}/models"
+    return f"{base}/v1/models"
+
+
+async def _check_openai_compatible_provider(
+    request: Request,
+    *,
+    provider_name: str,
+    provider: ProviderSection,
+) -> Dict[str, Any]:
+    configured = bool(provider.enabled)
+    key_present = bool(provider.api_key)
+    base_url = provider.base_url if configured else None
+    model = provider.model or None
+
+    out: Dict[str, Any] = {
+        "name": provider_name,
+        "configured": configured,
+        "key_present": key_present,
+        "valid": False,
+        "enabled_for_user": False,
+        "model": model,
+        "base_url": base_url,
+        "status_code": None,
+        "reason": "",
+    }
+
+    if not configured:
+        out["reason"] = "provider is disabled in config"
+        return out
+    if not provider.base_url:
+        out["reason"] = "provider base_url is empty"
+        return out
+    if not key_present:
+        out["reason"] = "provider api key is empty"
+        return out
+
+    headers = {"Authorization": f"Bearer {provider.api_key}"}
+    url = _models_url_for_provider(provider.base_url)
+    client = request.app.state.services.transcription.client
+    try:
+        resp = await client.get(url, headers=headers, timeout=min(float(provider.timeout_sec or 30), 30.0))
+    except Exception as exc:
+        out["reason"] = f"validation request failed: {exc.__class__.__name__}"
+        return out
+
+    out["status_code"] = resp.status_code
+    if 200 <= resp.status_code < 400:
+        out["valid"] = True
+        out["enabled_for_user"] = True
+        out["reason"] = "ok"
+        return out
+
+    if resp.status_code in {401, 403}:
+        out["reason"] = "api key rejected by provider"
+    else:
+        out["reason"] = f"provider returned HTTP {resp.status_code}"
+    return out
 
 
 def _config_file_path() -> Path:
@@ -194,6 +269,213 @@ async def providers(request: Request) -> Dict[str, Any]:
         "default_provider": settings.transcription.default_provider,
         "providers": [x.model_dump() for x in items],
     }
+
+
+@app.get(
+    "/providers/status",
+    response_model=ProviderRuntimeStatusResponse,
+    tags=["providers"],
+    summary="Configured providers with runtime key validation",
+)
+async def provider_status(request: Request) -> Dict[str, Any]:
+    settings: Settings = request.app.state.settings
+
+    items: List[Dict[str, Any]] = [
+        {
+            "name": "local",
+            "configured": True,
+            "key_present": False,
+            "valid": True,
+            "enabled_for_user": True,
+            "model": settings.local.model_id,
+            "base_url": None,
+            "status_code": None,
+            "reason": "local backend is available",
+        }
+    ]
+
+    for provider_name, provider in [
+        ("openai", settings.providers.openai),
+        ("groq", settings.providers.groq),
+    ]:
+        items.append(
+            await _check_openai_compatible_provider(
+                request,
+                provider_name=provider_name,
+                provider=provider,
+            )
+        )
+
+    return {
+        "default_provider": settings.transcription.default_provider,
+        "providers": items,
+    }
+
+
+def _local_model_download_plan(model: str) -> Dict[str, Any]:
+    requested = str(model or "").strip() or "large-v3"
+    canonical = canonicalize_faster_whisper_model_id(requested) or normalize_model_token(requested)
+    canonical = {
+        "tiny.en": "tiny",
+        "base.en": "base",
+        "small.en": "small",
+        "medium.en": "medium",
+        "large": "large-v3",
+    }.get(canonical, canonical)
+
+    repo_map: Dict[str, Dict[str, str]] = {
+        "tiny": {
+            "preset_name": "faster-whisper-tiny",
+            "repo_id": "Systran/faster-whisper-tiny",
+            "output_subdir": "faster-whisper-tiny",
+            "variant": "tiny",
+        },
+        "base": {
+            "preset_name": "faster-whisper-base",
+            "repo_id": "Systran/faster-whisper-base",
+            "output_subdir": "faster-whisper-base",
+            "variant": "base",
+        },
+        "small": {
+            "preset_name": "faster-whisper-small",
+            "repo_id": "Systran/faster-whisper-small",
+            "output_subdir": "faster-whisper-small",
+            "variant": "small",
+        },
+        "medium": {
+            "preset_name": "faster-whisper-medium",
+            "repo_id": "Systran/faster-whisper-medium",
+            "output_subdir": "faster-whisper-medium",
+            "variant": "medium",
+        },
+        "large-v2": {
+            "preset_name": "faster-whisper-large-v2",
+            "repo_id": "Systran/faster-whisper-large-v2",
+            "output_subdir": "faster-whisper-large-v2",
+            "variant": "large",
+        },
+        "large-v3": {
+            "preset_name": "faster-whisper-large-v3",
+            "repo_id": "Systran/faster-whisper-large-v3",
+            "output_subdir": "faster-whisper-large-v3",
+            "variant": "large-v3",
+        },
+    }
+    plan = repo_map.get(canonical)
+    if plan is None:
+        raise HTTPException(status_code=422, detail=f"unsupported local model for panel download: {requested}")
+
+    meta = WHISPER_VARIANT_METADATA.get(plan["variant"], {})
+    estimated_model_bin_mb = meta.get("estimated_model_bin_mb")
+    estimated_total_mb = int(round(float(estimated_model_bin_mb or 0) * 1.08 + 15)) if estimated_model_bin_mb else None
+    return {
+        "model": requested,
+        "canonical_model": canonical,
+        "revision": "main",
+        "estimated_model_bin_mb": estimated_model_bin_mb,
+        "estimated_total_mb": estimated_total_mb,
+        "estimated_vram_gb": meta.get("estimated_vram_gb"),
+        **plan,
+    }
+
+
+def _local_model_aliases(canonical_model: str, output_subdir: str) -> List[str]:
+    variant = detect_whisper_variant(canonical_model) or canonical_model
+    aliases = {canonical_model, output_subdir, f"faster-whisper-{canonical_model}"}
+    aliases.update(VARIANT_TO_LOCAL_DIR_ALIASES.get(variant, []))
+    if canonical_model == "large-v2":
+        aliases.add("faster-whisper-large-v2")
+    if canonical_model == "large-v3":
+        aliases.update({"large", "faster-whisper-large", "openai-whisper-large-v3"})
+    return sorted(normalize_model_token(x) for x in aliases if x)
+
+
+def _find_matching_local_model(local_models: List[Dict[str, Any]], plan: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    canonical = str(plan["canonical_model"])
+    aliases = _local_model_aliases(canonical, str(plan["output_subdir"]))
+    strict_alias_match = canonical == "large-v2"
+    expected_variant = detect_whisper_variant(canonical)
+
+    for item in local_models:
+        names = [
+            item.get("display_name"),
+            item.get("model_id"),
+            item.get("path"),
+        ]
+        normalized_names = [normalize_model_token(str(x)) for x in names if x]
+        if any(alias and any(alias in value for value in normalized_names) for alias in aliases):
+            return item
+        if not strict_alias_match and expected_variant and item.get("variant") == expected_variant:
+            return item
+    return None
+
+
+def _local_model_status_payload(request: Request, model: str) -> Dict[str, Any]:
+    settings: Settings = request.app.state.settings
+    downloads = request.app.state.services.transcription.downloads
+    plan = _local_model_download_plan(model or settings.local.model_id)
+    items = downloads.list_local_models()
+    matched = _find_matching_local_model(items, plan)
+    return {
+        "model": plan["model"],
+        "canonical_model": plan["canonical_model"],
+        "present": matched is not None,
+        "matched_model": matched,
+        "preset_name": plan["preset_name"],
+        "repo_id": plan["repo_id"],
+        "revision": plan["revision"],
+        "output_subdir": plan["output_subdir"],
+        "estimated_model_bin_mb": plan["estimated_model_bin_mb"],
+        "estimated_total_mb": plan["estimated_total_mb"],
+        "estimated_vram_gb": plan["estimated_vram_gb"],
+        "hf_token_present": bool(os.getenv("HF_TOKEN") or os.getenv("HUGGINGFACE_HUB_TOKEN")),
+        "hf_token_help_url": "https://huggingface.co/settings/tokens",
+    }
+
+
+@app.get(
+    "/models/local/status",
+    response_model=UserLocalModelStatusResponse,
+    tags=["providers"],
+    summary="Check whether a panel local model is downloaded",
+)
+async def user_local_model_status(request: Request, model: str = "large-v3") -> Dict[str, Any]:
+    return _local_model_status_payload(request, model)
+
+
+@app.post(
+    "/models/local/download",
+    response_model=DownloadBatchResponse,
+    tags=["providers"],
+    summary="Download a panel local model from Hugging Face",
+)
+async def user_download_local_model(request: Request, payload: UserLocalModelDownloadRequest) -> Dict[str, Any]:
+    status_payload = _local_model_status_payload(request, payload.model)
+    if status_payload["present"]:
+        return {"total": 0, "items": []}
+
+    downloads = request.app.state.services.transcription.downloads
+    jobs = await downloads.create_local_model_jobs(
+        preset_name=None,
+        repo_id=status_payload["repo_id"],
+        revision=status_payload["revision"],
+        output_subdir=status_payload["output_subdir"],
+        files=None,
+        auth_token=(payload.hf_token or os.getenv("HF_TOKEN") or os.getenv("HUGGINGFACE_HUB_TOKEN") or None),
+    )
+    items = [x.to_dict() for x in jobs]
+    return {"total": len(items), "items": items}
+
+
+@app.get(
+    "/models/local/downloads/{job_id}",
+    response_model=DownloadJobResponse,
+    tags=["providers"],
+    summary="Get a panel local model download job",
+)
+async def user_get_local_model_download(request: Request, job_id: str) -> Dict[str, Any]:
+    downloads = request.app.state.services.transcription.downloads
+    return downloads.get(job_id).to_dict()
 
 
 @app.post(

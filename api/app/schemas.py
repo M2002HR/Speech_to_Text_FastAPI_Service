@@ -28,6 +28,23 @@ class ProvidersResponse(BaseModel):
     providers: List[ProviderInfo]
 
 
+class ProviderRuntimeStatus(BaseModel):
+    name: str
+    configured: bool
+    key_present: bool
+    valid: bool
+    enabled_for_user: bool
+    model: Optional[str] = None
+    base_url: Optional[str] = None
+    status_code: Optional[int] = None
+    reason: str = ""
+
+
+class ProviderRuntimeStatusResponse(BaseModel):
+    default_provider: str
+    providers: List[ProviderRuntimeStatus]
+
+
 class TranscribeOptions(BaseModel):
     provider: Optional[Literal["local", "openai", "groq", "custom"]] = None
     model: Optional[str] = None
@@ -211,6 +228,27 @@ class LocalModelDownloadRequest(BaseModel):
     revision: str = "main"
     output_subdir: Optional[str] = None
     files: Optional[List[str]] = None
+
+
+class UserLocalModelDownloadRequest(BaseModel):
+    model: str = Field(default="large-v3")
+    hf_token: Optional[str] = None
+
+
+class UserLocalModelStatusResponse(BaseModel):
+    model: str
+    canonical_model: str
+    present: bool
+    matched_model: Optional[LocalModelInfo] = None
+    preset_name: str
+    repo_id: str
+    revision: str
+    output_subdir: str
+    estimated_model_bin_mb: Optional[int] = None
+    estimated_total_mb: Optional[int] = None
+    estimated_vram_gb: Optional[float] = None
+    hf_token_present: bool
+    hf_token_help_url: str
 
 
 class DownloadBatchResponse(BaseModel):

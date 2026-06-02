@@ -1275,6 +1275,7 @@ class DownloadJob:
     resolved_url: str
     output_subdir: str
     output_filename: Optional[str]
+    auth_token: Optional[str] = None
     status: str = "pending"
     created_at: datetime = field(default_factory=now_utc)
     started_at: Optional[datetime] = None
@@ -1371,10 +1372,12 @@ class DownloadManager:
         *,
         repo_id: str,
         revision: str = "main",
+        auth_token: Optional[str] = None,
     ) -> List[Dict[str, Any]]:
         endpoint = join_url(self.settings.mirrors.huggingface_base, f"/api/models/{repo_id}/revision/{revision}")
+        headers = {"Authorization": f"Bearer {auth_token}"} if auth_token else None
         try:
-            resp = await self.client.get(endpoint, params={"blobs": "true"}, timeout=60)
+            resp = await self.client.get(endpoint, params={"blobs": "true"}, headers=headers, timeout=60)
         except httpx.RequestError as exc:
             raise HTTPException(
                 status_code=503,
@@ -1499,6 +1502,7 @@ class DownloadManager:
         resolved_url: str,
         output_subdir: str,
         output_filename: Optional[str],
+        auth_token: Optional[str] = None,
     ) -> DownloadJob:
         if not self.settings.downloads.enabled:
             raise HTTPException(status_code=403, detail="downloads are disabled")
@@ -1512,6 +1516,7 @@ class DownloadManager:
             resolved_url=resolved_url,
             output_subdir=sanitize_name(output_subdir),
             output_filename=sanitize_name(output_filename) if output_filename else None,
+            auth_token=auth_token,
         )
         self.jobs[job.job_id] = job
         asyncio.create_task(self._run_job(job))
@@ -1525,6 +1530,7 @@ class DownloadManager:
         revision: str,
         output_subdir: Optional[str],
         files: Optional[List[str]],
+        auth_token: Optional[str] = None,
     ) -> List[DownloadJob]:
         selected_repo = (repo_id or "").strip()
         selected_subdir = (output_subdir or "").strip()
@@ -1550,7 +1556,7 @@ class DownloadManager:
             model_files = requested_files
         else:
             try:
-                remote_files = await self.fetch_remote_repo_files(repo_id=selected_repo, revision=revision)
+                remote_files = await self.fetch_remote_repo_files(repo_id=selected_repo, revision=revision, auth_token=auth_token)
                 remote_paths = [x["path"] for x in remote_files]
                 model_files = self.choose_download_files(remote_paths, requested_files=None)
             except HTTPException as exc:
@@ -1572,6 +1578,7 @@ class DownloadManager:
                 resolved_url=built["url"],
                 output_subdir=selected_subdir,
                 output_filename=Path(file_name).name,
+                auth_token=auth_token,
             )
             created.append(job)
 
@@ -1667,6 +1674,8 @@ class DownloadManager:
                 resumed = part_path.stat().st_size if mode == "ab" and part_path.exists() else 0
 
                 headers = {}
+                if job.auth_token:
+                    headers["Authorization"] = f"Bearer {job.auth_token}"
                 if resumed > 0 and self.settings.downloads.allow_resume:
                     headers["Range"] = f"bytes={resumed}-"
 
@@ -2277,6 +2286,198 @@ class TranscriptionService:
                 if p.exists():
                     p.unlink(missing_ok=True)
 
+    def _resolve_api_chunking_runtime(self, options: Dict[str, Any], duration_seconds: Optional[float]) -> Dict[str, Any]:
+        base = self._resolve_chunking_runtime(options, duration_seconds)
+        duration = base["duration_seconds"]
+        if duration is None:
+            return {**base, "should_chunk": False, "reason": "duration_unknown"}
+
+        # Upstream STT APIs do not expose per-request progress. Smaller API chunks give
+        # real progress checkpoints without making the UI wait for one long request.
+        window_minutes = min(max(float(base["chunk_minutes"]), 0.25), 2.0)
+        overlap_minutes = min(
+            max(float(base["overlap_minutes"]), 0.0),
+            max(0.0, window_minutes * 0.15),
+            0.25,
+        )
+        if overlap_minutes >= window_minutes:
+            overlap_minutes = max(0.0, window_minutes - 0.01)
+
+        should_chunk = bool(base["enabled"] and duration > (window_minutes * 60.0 * 1.05))
+        return {
+            **base,
+            "should_chunk": should_chunk,
+            "chunk_minutes": window_minutes,
+            "overlap_minutes": overlap_minutes,
+            "min_duration_minutes": window_minutes,
+            "reason": "api_chunking_enabled" if should_chunk else "duration_or_settings_not_matched",
+        }
+
+    async def _transcribe_api_with_optional_chunking(
+        self,
+        *,
+        provider: str,
+        prepared_path: Path,
+        options: Dict[str, Any],
+        duration: Optional[float],
+        progress_cb: Optional[Callable[[float], None]] = None,
+        partial_text_cb: Optional[Callable[[str], None]] = None,
+        cancel_event: Optional[asyncio.Event] = None,
+    ) -> Dict[str, Any]:
+        def _ensure_not_cancelled() -> None:
+            if cancel_event is not None and cancel_event.is_set():
+                raise asyncio.CancelledError("transcription job cancelled")
+
+        _ensure_not_cancelled()
+        chunking = self._resolve_api_chunking_runtime(options, duration)
+        bias_text = self._build_vocabulary_bias_text(options)
+        api_options = self._apply_vocabulary_bias(options, bias_text)
+
+        if not chunking["should_chunk"]:
+            out = await self.api.transcribe(provider, prepared_path, api_options)
+            out.setdefault("metadata", {}).setdefault(
+                "chunking",
+                {
+                    "enabled": bool(chunking["enabled"]),
+                    "used": False,
+                    "reason": chunking.get("reason") or "duration_or_settings_not_matched",
+                    "api_progress_available": False,
+                },
+            )
+            if bias_text:
+                out.setdefault("metadata", {})["vocabulary_bias"] = {
+                    "enabled": True,
+                    "terms": bias_text,
+                }
+            return out
+
+        windows = _build_overlapping_windows(
+            duration_seconds=float(chunking["duration_seconds"]),
+            window_minutes=float(chunking["chunk_minutes"]),
+            overlap_minutes=float(chunking["overlap_minutes"]),
+        )
+        if len(windows) <= 1:
+            out = await self.api.transcribe(provider, prepared_path, api_options)
+            out.setdefault("metadata", {}).setdefault(
+                "chunking",
+                {
+                    "enabled": True,
+                    "used": False,
+                    "reason": "single_window_after_planning",
+                    "api_progress_available": False,
+                },
+            )
+            return out
+
+        chunk_runs: List[Dict[str, Any]] = []
+        chunk_temp_paths: List[Path] = []
+        total_windows = len(windows)
+        streamed_text = ""
+        try:
+            for idx, w in enumerate(windows):
+                _ensure_not_cancelled()
+                if progress_cb:
+                    progress_cb(round((idx / max(1, total_windows)) * 100.0, 2))
+
+                chunk_path = await self.media.extract_audio_window(prepared_path, float(w["start"]), float(w["end"]))
+                chunk_temp_paths.append(chunk_path)
+
+                chunk_options = dict(api_options)
+                chunk_options["segment_timestamps"] = True
+                chunk_out = await self.api.transcribe(provider, chunk_path, chunk_options)
+                chunk_runs.append(
+                    {
+                        "index": int(w["index"]),
+                        "start": float(w["start"]),
+                        "end": float(w["end"]),
+                        "output": chunk_out,
+                    }
+                )
+
+                if partial_text_cb is not None:
+                    merged_preview = self._merge_chunk_outputs(
+                        chunk_runs=chunk_runs,
+                        segment_timestamps=False,
+                        word_timestamps=False,
+                        similarity_threshold=float(self.settings.local.chunk_merge_similarity_threshold),
+                        max_word_overlap=int(self.settings.local.chunk_merge_max_word_overlap),
+                    )
+                    streamed_text = str(merged_preview.get("text") or "").strip()
+                    if streamed_text:
+                        partial_text_cb(streamed_text)
+
+                if progress_cb:
+                    progress_cb(round(((idx + 1) / max(1, total_windows)) * 100.0, 2))
+
+            _ensure_not_cancelled()
+            merged = self._merge_chunk_outputs(
+                chunk_runs=chunk_runs,
+                segment_timestamps=(
+                    self.settings.transcription.enable_segment_timestamps
+                    if options.get("segment_timestamps") is None
+                    else bool(options.get("segment_timestamps"))
+                ),
+                word_timestamps=(
+                    self.settings.transcription.enable_word_timestamps
+                    if options.get("word_timestamps") is None
+                    else bool(options.get("word_timestamps"))
+                ),
+                similarity_threshold=float(self.settings.local.chunk_merge_similarity_threshold),
+                max_word_overlap=int(self.settings.local.chunk_merge_max_word_overlap),
+            )
+
+            total_process_ms = 0.0
+            language: Optional[str] = merged.get("language")
+            model_name = str(api_options.get("model") or "")
+            for run in chunk_runs:
+                output = run["output"]
+                usage = output.get("usage") or {}
+                if not model_name and usage.get("model"):
+                    model_name = str(usage["model"])
+                if isinstance(usage.get("process_ms"), (int, float)):
+                    total_process_ms += float(usage["process_ms"])
+                if language is None and output.get("language"):
+                    language = str(output["language"])
+
+            out: Dict[str, Any] = {
+                "text": merged["text"],
+                "language": language,
+                "duration_seconds": duration,
+                "segments": merged["segments"],
+                "words": merged["words"],
+                "usage": {
+                    "provider": provider,
+                    "model": model_name or str(api_options.get("model") or "default"),
+                    "audio_seconds": duration,
+                    "process_ms": round(total_process_ms, 2),
+                },
+                "metadata": {
+                    "chunking": {
+                        "enabled": True,
+                        "used": True,
+                        "provider": provider,
+                        "api_progress_available": False,
+                        "progress_mode": "time-window-chunks",
+                        "window_minutes": float(chunking["chunk_minutes"]),
+                        "overlap_minutes": float(chunking["overlap_minutes"]),
+                        "window_count": len(windows),
+                        "windows": windows,
+                        "merge_stats": merged["merge_stats"],
+                    },
+                    "upstream_chunk_count": len(chunk_runs),
+                },
+            }
+            if bias_text:
+                out["metadata"]["vocabulary_bias"] = {
+                    "enabled": True,
+                    "terms": bias_text,
+                }
+            return out
+        finally:
+            for p in chunk_temp_paths:
+                if p.exists():
+                    p.unlink(missing_ok=True)
+
     async def _run_transcription_job(self, job: TranscriptionJob) -> None:
         async with self._job_sem:
             if job.cancel_event.is_set():
@@ -2289,36 +2490,44 @@ class TranscriptionService:
             try:
                 job.status = "running"
                 job.started_at = now_utc()
-                self._update_job_progress(job, 0, "validating")
+                self._update_job_progress(job, 1, "validating")
 
                 if not (is_video_file(job.source_filename, job.source_content_type) or is_audio_file(job.source_filename, job.source_content_type)):
                     raise HTTPException(status_code=415, detail="unsupported media type, upload an audio/video file")
 
-                self._update_job_progress(job, 0, "preparing-audio")
+                self._update_job_progress(job, 6, "preparing-audio")
                 prepared_path = await self.media.extract_audio(job.raw_path, job.source_filename, job.source_content_type)
                 if job.cancel_event.is_set():
                     raise asyncio.CancelledError("transcription job cancelled")
                 duration = await self.media.probe_duration(prepared_path)
                 if job.cancel_event.is_set():
                     raise asyncio.CancelledError("transcription job cancelled")
-                self._update_job_progress(job, 0, "loading-model")
+                self._update_job_progress(job, 12, "loading-model")
 
                 if job.provider == "local":
                     out = await self._transcribe_local_with_optional_chunking(
                         prepared_path=prepared_path,
                         options=job.options,
                         duration=duration,
-                        progress_cb=lambda p: self._update_job_progress(job, p, "transcribing"),
+                        progress_cb=lambda p: self._update_job_progress(job, 15 + (float(p) * 0.8), "transcribing"),
                         partial_text_cb=lambda txt: self._update_job_partial_result(job, txt),
                         cancel_event=job.cancel_event,
                     )
                 else:
                     if job.cancel_event.is_set():
                         raise asyncio.CancelledError("transcription job cancelled")
-                    out = await self.api.transcribe(job.provider, prepared_path, job.options)
+                    out = await self._transcribe_api_with_optional_chunking(
+                        provider=job.provider,
+                        prepared_path=prepared_path,
+                        options=job.options,
+                        duration=duration,
+                        progress_cb=lambda p: self._update_job_progress(job, 15 + (float(p) * 0.8), "transcribing"),
+                        partial_text_cb=lambda txt: self._update_job_partial_result(job, txt),
+                        cancel_event=job.cancel_event,
+                    )
                     if job.cancel_event.is_set():
                         raise asyncio.CancelledError("transcription job cancelled")
-                    self._update_job_progress(job, 0, "finalizing")
+                    self._update_job_progress(job, 96, "finalizing")
 
                 meta = out.setdefault("metadata", {})
                 meta.update(

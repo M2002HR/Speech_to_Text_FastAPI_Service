@@ -109,6 +109,38 @@ def test_health_and_providers(client_factory) -> None:
         assert p.json()["default_provider"] == "local"
 
 
+def test_provider_status_validates_api_keys(client_factory) -> None:
+    class _Resp:
+        def __init__(self, status_code: int) -> None:
+            self.status_code = status_code
+
+    async def _fake_get(url, **kwargs):
+        if "api.groq.com" in str(url):
+            return _Resp(200)
+        return _Resp(401)
+
+    with client_factory(
+        {
+            "PROVIDER_OPENAI_ENABLED": "true",
+            "PROVIDER_OPENAI_API_KEY": "sk-test",
+            "PROVIDER_GROQ_ENABLED": "true",
+            "PROVIDER_GROQ_API_KEY": "gsk-test",
+        }
+    ) as client:
+        client.app.state.services.transcription.client.get = _fake_get  # type: ignore[method-assign]
+
+        resp = client.get("/providers/status")
+        assert resp.status_code == 200
+        providers = {item["name"]: item for item in resp.json()["providers"]}
+
+        assert providers["local"]["enabled_for_user"] is True
+        assert providers["groq"]["valid"] is True
+        assert providers["groq"]["enabled_for_user"] is True
+        assert providers["openai"]["valid"] is False
+        assert providers["openai"]["enabled_for_user"] is False
+        assert providers["openai"]["status_code"] == 401
+
+
 def test_transcribe_endpoint_mocked(client_factory) -> None:
     with client_factory() as client:
         client.app.state.services.transcription.transcribe_upload = _fake_transcribe_upload
@@ -268,6 +300,53 @@ def test_admin_local_models_and_batch_download(client_factory) -> None:
         )
         assert dl_resp.status_code == 200
         assert dl_resp.json()["total"] == 2
+
+
+def test_user_local_model_status_and_download(client_factory) -> None:
+    captured: Dict[str, Any] = {}
+
+    async def _fake_user_create_local_model_jobs(**kwargs):
+        captured.update(kwargs)
+        return await _fake_create_local_model_jobs(**kwargs)
+
+    with client_factory() as client:
+        mgr = client.app.state.services.transcription.downloads
+        mgr.list_local_models = lambda: [  # type: ignore[assignment]
+            {
+                "model_id": "/tmp/runtime/models/faster-whisper-small",
+                "display_name": "faster-whisper-small",
+                "path": "/tmp/runtime/models/faster-whisper-small",
+                "total_size_bytes": 123,
+                "model_bin_size_bytes": 100,
+                "file_count": 5,
+                "updated_at": "2026-01-01T00:00:00Z",
+                "files": [{"path": "config.json", "size_bytes": 10}],
+                "variant": "small",
+            }
+        ]
+        mgr.create_local_model_jobs = _fake_user_create_local_model_jobs  # type: ignore[assignment]
+
+        present = client.get("/models/local/status?model=small")
+        assert present.status_code == 200
+        assert present.json()["present"] is True
+        assert present.json()["matched_model"]["display_name"] == "faster-whisper-small"
+
+        missing = client.get("/models/local/status?model=base")
+        assert missing.status_code == 200
+        body = missing.json()
+        assert body["present"] is False
+        assert body["repo_id"] == "Systran/faster-whisper-base"
+        assert body["estimated_total_mb"] is not None
+
+        dl_resp = client.post(
+            "/models/local/download",
+            json={"model": "base", "hf_token": "hf_test_token"},
+        )
+        assert dl_resp.status_code == 200
+        assert dl_resp.json()["total"] == 2
+        assert captured["repo_id"] == "Systran/faster-whisper-base"
+        assert captured["output_subdir"] == "faster-whisper-base"
+        assert captured["auth_token"] == "hf_test_token"
 
 
 def test_admin_remote_models_endpoints(client_factory) -> None:

@@ -9,7 +9,7 @@ from fastapi import HTTPException
 import pytest
 
 from api.app.config import Settings
-from api.app.services import DownloadManager, LocalTranscriber, normalize_proxy_env
+from api.app.services import DownloadManager, LocalTranscriber, TranscriptionService, normalize_proxy_env
 
 
 def _settings() -> Settings:
@@ -108,6 +108,30 @@ def test_create_local_model_jobs_with_explicit_files_without_remote_fetch() -> N
         )
     )
     assert len(created) == 2
+
+
+def test_create_local_model_jobs_keeps_hf_token_private() -> None:
+    settings = _settings()
+    mgr = DownloadManager(settings=settings, client=None)  # type: ignore[arg-type]
+
+    async def _fake_resolve_hf_file_url(**kwargs):
+        return {"source": "official", "url": f"https://huggingface.co/{kwargs['repo_id']}/resolve/{kwargs['revision']}/{kwargs['filename']}"}
+
+    mgr.resolve_hf_file_url = _fake_resolve_hf_file_url  # type: ignore[assignment]
+
+    created = _run(
+        mgr.create_local_model_jobs(
+            preset_name=None,
+            repo_id="Systran/faster-whisper-base",
+            revision="main",
+            output_subdir="x",
+            files=["config.json"],
+            auth_token="hf_secret",
+        )
+    )
+    assert len(created) == 1
+    assert created[0].auth_token == "hf_secret"
+    assert "auth_token" not in created[0].to_dict()
 
 
 def test_create_local_model_jobs_fallback_when_remote_unreachable() -> None:
@@ -217,6 +241,72 @@ def test_local_transcriber_resolve_model_id_prefers_local_dir_for_large_v2() -> 
         (local_dir / "vocabulary.txt").write_text("a", encoding="utf-8")
 
         assert transcriber._resolve_model_id("Systran/faster-whisper-large-v2") == str(local_dir)
+
+
+def test_api_transcription_chunks_for_visible_progress() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        settings = _settings()
+        settings.storage.output_dir = tmp
+        svc = TranscriptionService(settings)
+        prepared = Path(tmp) / "input.wav"
+        prepared.write_bytes(b"fake")
+        calls = []
+        updates = []
+        partials = []
+
+        async def _fake_extract_audio_window(_input_path: Path, start_sec: float, end_sec: float) -> Path:
+            out = Path(tmp) / f"chunk-{len(calls)}.wav"
+            out.write_bytes(b"chunk")
+            return out
+
+        class _FakeAPI:
+            async def transcribe(self, provider_name: str, audio_path: Path, options):
+                calls.append((provider_name, audio_path.name, dict(options)))
+                idx = len(calls)
+                return {
+                    "text": f"part {idx}",
+                    "language": "en",
+                    "duration_seconds": 120.0,
+                    "segments": None,
+                    "words": None,
+                    "usage": {
+                        "provider": provider_name,
+                        "model": str(options.get("model") or "whisper-large-v3"),
+                        "audio_seconds": 120.0,
+                        "process_ms": 100.0,
+                    },
+                    "metadata": {},
+                }
+
+        svc.media.extract_audio_window = _fake_extract_audio_window  # type: ignore[assignment]
+        svc.api = _FakeAPI()  # type: ignore[assignment]
+        try:
+            out = _run(
+                svc._transcribe_api_with_optional_chunking(
+                    provider="groq",
+                    prepared_path=prepared,
+                    options={
+                        "model": "whisper-large-v3",
+                        "chunking_enabled": True,
+                        "chunk_minutes": 10,
+                        "chunk_overlap_minutes": 5,
+                        "segment_timestamps": True,
+                    },
+                    duration=300.0,
+                    progress_cb=lambda p: updates.append(p),
+                    partial_text_cb=lambda text: partials.append(text),
+                )
+            )
+        finally:
+            _run(svc.close())
+
+        assert len(calls) >= 2
+        assert updates
+        assert updates[-1] >= 99.0
+        assert partials
+        assert "part" in out["text"]
+        assert out["metadata"]["chunking"]["used"] is True
+        assert out["metadata"]["chunking"]["progress_mode"] == "time-window-chunks"
 
 
 def test_local_transcriber_transcribe_uses_duration_hint_for_progress() -> None:
