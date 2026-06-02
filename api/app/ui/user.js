@@ -41,6 +41,7 @@ const I18N = {
     health_provider: "Provider",
     panel_processing: "پردازش",
     label_file: "فایل صوتی/ویدیویی",
+    label_provider: "موتور پردازش",
     label_language: "زبان متن",
     label_vocab: "واژگان کمکی (اختیاری)",
     placeholder_vocab: "نام‌ها، اصطلاحات و واژه‌های حساس",
@@ -61,6 +62,7 @@ const I18N = {
     tip_copy_prompt: "کپی پرامپت",
     tip_close: "بستن",
     tip_save_settings: "ذخیره تنظیمات",
+    tip_provider_help: "Local روی همین سیستم اجرا می‌شود. OpenAI و Groq فقط وقتی فعال می‌شوند که کلیدشان در تنظیمات معتبر باشد.",
     tip_language_help: "زبان متن خروجی را مشخص می‌کند. حالت خودکار برای فایل‌های چندزبانه مناسب است.",
     tip_vocab_help: "کلمات مهم پروژه را وارد کن تا مدل در تشخیص آن‌ها دقیق‌تر عمل کند.",
     lang_auto: "تشخیص خودکار",
@@ -91,6 +93,29 @@ const I18N = {
     status_settings_invalid_number: "مقادیر تنظیمات معتبر نیست.",
     status_prompt_copied: "پرامپت کپی شد.",
     status_prompt_copy_failed: "کپی پرامپت انجام نشد.",
+    provider_local: "Local (مدل داخلی)",
+    provider_openai: "OpenAI API",
+    provider_groq: "Groq API",
+    provider_available: "{{name}} آماده است.",
+    provider_unavailable: "{{name}} غیرفعال است: {{reason}}",
+    provider_status_loading: "در حال بررسی providerها...",
+    provider_status_failed: "بررسی providerها ناموفق بود؛ فقط Local فعال است.",
+    local_model_missing_title: "مدل لوکال آماده نیست",
+    local_model_missing_message: "مدل {{model}} روی این سیستم پیدا نشد. حجم تقریبی دانلود {{size}} است. اگر می‌خواهی از مدل لوکال استفاده کنی، دانلود را شروع کن؛ در غیر این صورت این مرحله را اسکیپ کن.",
+    local_model_size_label: "حجم تقریبی",
+    local_model_download: "دانلود مدل",
+    local_model_retry: "تلاش دوباره",
+    local_model_skip: "فعلا اسکیپ کن",
+    local_model_token_label: "توکن Hugging Face (در صورت نیاز)",
+    local_model_token_placeholder: "hf_...",
+    local_model_token_help: "برای مدل‌های عمومی معمولا لازم نیست. اگر خطای دسترسی یا Rate limit دیدی، از این لینک token بساز:",
+    local_model_progress_waiting: "منتظر تصمیم شماست.",
+    local_model_progress_running: "در حال دانلود {{done}} از {{total}} فایل، {{bytes}}",
+    local_model_download_done: "دانلود مدل کامل شد. درخواست به صف اضافه می‌شود.",
+    local_model_download_failed: "دانلود مدل ناموفق بود: {{msg}}",
+    local_model_token_needed: "Hugging Face خطای دسترسی/محدودیت داد. token را از لینک زیر بساز، اینجا وارد کن و دوباره تلاش کن.",
+    status_local_model_checking: "در حال بررسی مدل لوکال...",
+    status_local_model_skipped: "دانلود مدل لوکال اسکیپ شد.",
     error_prefix: "خطا",
     health_ok: "OK",
     health_missing: "ناموجود",
@@ -150,6 +175,7 @@ const I18N = {
     health_provider: "Provider",
     panel_processing: "Processing",
     label_file: "Audio/Video file",
+    label_provider: "Processing engine",
     label_language: "Transcription language",
     label_vocab: "Vocabulary bias (optional)",
     placeholder_vocab: "Names, terms, and sensitive words",
@@ -170,6 +196,7 @@ const I18N = {
     tip_copy_prompt: "Copy prompt",
     tip_close: "Close",
     tip_save_settings: "Save settings",
+    tip_provider_help: "Local runs on this machine. OpenAI and Groq are enabled only when their configured API key validates successfully.",
     tip_language_help: "Sets the output transcription language. Auto is useful for multilingual files.",
     tip_vocab_help: "Add important project words to improve recognition consistency.",
     lang_auto: "Auto detect",
@@ -200,6 +227,29 @@ const I18N = {
     status_settings_invalid_number: "Settings values are invalid.",
     status_prompt_copied: "Prompt copied.",
     status_prompt_copy_failed: "Prompt copy failed.",
+    provider_local: "Local model",
+    provider_openai: "OpenAI API",
+    provider_groq: "Groq API",
+    provider_available: "{{name}} is ready.",
+    provider_unavailable: "{{name}} disabled: {{reason}}",
+    provider_status_loading: "Checking providers...",
+    provider_status_failed: "Provider check failed; only Local is enabled.",
+    local_model_missing_title: "Local model is not ready",
+    local_model_missing_message: "Model {{model}} was not found on this system. Estimated download size is {{size}}. Start the download to use Local, or skip this step.",
+    local_model_size_label: "Estimated size",
+    local_model_download: "Download model",
+    local_model_retry: "Retry",
+    local_model_skip: "Skip for now",
+    local_model_token_label: "Hugging Face token (if needed)",
+    local_model_token_placeholder: "hf_...",
+    local_model_token_help: "Usually not required for public models. If you hit access or rate-limit errors, create a token here:",
+    local_model_progress_waiting: "Waiting for your decision.",
+    local_model_progress_running: "Downloading {{done}} of {{total}} files, {{bytes}}",
+    local_model_download_done: "Model download completed. The request will be queued.",
+    local_model_download_failed: "Model download failed: {{msg}}",
+    local_model_token_needed: "Hugging Face returned an access/rate-limit error. Create a token from the link below, paste it here, and retry.",
+    status_local_model_checking: "Checking local model...",
+    status_local_model_skipped: "Local model download skipped.",
     error_prefix: "Error",
     health_ok: "OK",
     health_missing: "Missing",
@@ -256,6 +306,7 @@ const THEME_KEY = "tootak_user_theme";
 const UI_LANG_KEY = "tootak_user_ui_lang";
 const TRANSCRIBE_LANG_KEY = "tootak_user_transcribe_lang";
 const RUNTIME_SETTINGS_KEY = "tootak_runtime_profile";
+const PROVIDER_SELECTION_KEY = "tootak_user_provider";
 
 const els = {
   toastRoot: $("toastRoot"),
@@ -266,6 +317,8 @@ const els = {
 
   transcribeForm: $("transcribeForm"),
   fileInput: $("fileInput"),
+  providerSelect: $("providerSelect"),
+  providerStatusHint: $("providerStatusHint"),
   languageSelect: $("languageSelect"),
   vocabularyBiasInput: $("vocabularyBiasInput"),
   btnTranscribe: $("btnTranscribe"),
@@ -288,6 +341,21 @@ const els = {
   promptTopicInput: $("promptTopicInput"),
   preparedPromptText: $("preparedPromptText"),
   btnCopyPrompt: $("btnCopyPrompt"),
+
+  localModelModal: $("localModelModal"),
+  localModelModalClose: $("localModelModalClose"),
+  localModelModalTitle: $("localModelModalTitle"),
+  localModelMessage: $("localModelMessage"),
+  localModelName: $("localModelName"),
+  localModelSize: $("localModelSize"),
+  localModelRepo: $("localModelRepo"),
+  localModelTokenInput: $("localModelTokenInput"),
+  localModelTokenHelp: $("localModelTokenHelp"),
+  localModelProgressPercent: $("localModelProgressPercent"),
+  localModelProgressBar: $("localModelProgressBar"),
+  localModelProgressMeta: $("localModelProgressMeta"),
+  btnLocalModelDownload: $("btnLocalModelDownload"),
+  btnLocalModelSkip: $("btnLocalModelSkip"),
 
   settingsModal: $("settingsModal"),
   settingsModalClose: $("settingsModalClose"),
@@ -343,6 +411,14 @@ const state = {
     velocityPerSec: 18,
   },
   runtimeSettings: { ...DEFAULT_RUNTIME_SETTINGS },
+  providerStatus: null,
+  selectedProvider: localStorage.getItem(PROVIDER_SELECTION_KEY) || "local",
+  localModelDownload: {
+    status: null,
+    jobs: [],
+    active: false,
+    resolver: null,
+  },
 };
 
 function t(key, params = {}) {
@@ -393,6 +469,25 @@ function toastByKey(key, type = "info", params = {}, durationMs = 3200) {
   showToast(t(key, params), type, durationMs);
 }
 
+function formatBytes(bytes) {
+  const value = Number(bytes || 0);
+  if (!Number.isFinite(value) || value <= 0) return "-";
+  const units = ["B", "KB", "MB", "GB", "TB"];
+  let size = value;
+  let unitIndex = 0;
+  while (size >= 1024 && unitIndex < units.length - 1) {
+    size /= 1024;
+    unitIndex += 1;
+  }
+  const digits = unitIndex >= 3 ? 2 : 1;
+  return `${size.toFixed(digits)} ${units[unitIndex]}`;
+}
+
+function formatEstimatedSize(status) {
+  const total = Number(status?.estimated_total_mb || status?.estimated_model_bin_mb || 0);
+  return total > 0 ? `~${total.toLocaleString()} MB` : "-";
+}
+
 function applyI18nText() {
   document.querySelectorAll("[data-i18n]").forEach((el) => {
     const key = el.getAttribute("data-i18n");
@@ -440,10 +535,12 @@ function applyUiLanguage(lang) {
 
   applyI18nText();
   initLanguageSelect();
+  renderProviderSelect();
   updatePromptTemplate();
   renderQueueList();
   syncSelectedOutput({ animate: false });
   renderStatus();
+  renderLocalModelModal();
 }
 
 function toggleUiLanguage() {
@@ -502,6 +599,125 @@ function initLanguageSelect() {
 
   const picked = previous && (previous === "" || LANGUAGE_CODES.includes(previous)) ? previous : "";
   els.languageSelect.value = picked;
+}
+
+function providerLabel(name) {
+  const key = `provider_${String(name || "").toLowerCase()}`;
+  const translated = t(key);
+  return translated === key ? String(name || "-") : translated;
+}
+
+function providerByName(name) {
+  const providers = state.providerStatus?.providers || [];
+  return providers.find((item) => item.name === name) || null;
+}
+
+function providerEnabled(name) {
+  const item = providerByName(name);
+  return Boolean(item && item.enabled_for_user);
+}
+
+function currentProviderInfo() {
+  return providerByName(state.selectedProvider) || providerByName("local") || null;
+}
+
+function updateProviderHint() {
+  if (!els.providerStatusHint) return;
+  const info = currentProviderInfo();
+  if (!info) {
+    els.providerStatusHint.textContent = t("provider_status_loading");
+    els.providerStatusHint.className = "hint provider-status-hint warn";
+    return;
+  }
+
+  const name = providerLabel(info.name);
+  if (info.enabled_for_user) {
+    const model = info.model ? ` (${info.model})` : "";
+    els.providerStatusHint.textContent = `${t("provider_available", { name })}${model}`;
+    els.providerStatusHint.className = "hint provider-status-hint ok";
+    return;
+  }
+
+  els.providerStatusHint.textContent = t("provider_unavailable", { name, reason: info.reason || "-" });
+  els.providerStatusHint.className = "hint provider-status-hint bad";
+}
+
+function renderProviderSelect() {
+  if (!els.providerSelect) return;
+  const providers = state.providerStatus?.providers || [
+    {
+      name: "local",
+      enabled_for_user: true,
+      valid: true,
+      model: state.runtimeSettings.model,
+      reason: "local backend is available",
+    },
+  ];
+
+  els.providerSelect.innerHTML = "";
+  providers
+    .filter((item) => ["local", "openai", "groq"].includes(item.name))
+    .forEach((item) => {
+      const opt = document.createElement("option");
+      opt.value = item.name;
+      opt.disabled = !item.enabled_for_user;
+      const suffix = item.enabled_for_user ? "" : ` - ${item.reason || "disabled"}`;
+      opt.textContent = `${providerLabel(item.name)}${suffix}`;
+      els.providerSelect.appendChild(opt);
+    });
+
+  if (!providerEnabled(state.selectedProvider)) {
+    state.selectedProvider = "local";
+    localStorage.setItem(PROVIDER_SELECTION_KEY, state.selectedProvider);
+  }
+  els.providerSelect.value = state.selectedProvider;
+  updateProviderHint();
+}
+
+async function loadProviderStatus() {
+  if (els.providerStatusHint) {
+    els.providerStatusHint.textContent = t("provider_status_loading");
+    els.providerStatusHint.className = "hint provider-status-hint warn";
+  }
+
+  try {
+    state.providerStatus = await apiFetch("/providers/status", { timeoutMs: 12000 });
+  } catch (err) {
+    state.providerStatus = {
+      default_provider: "local",
+      providers: [
+        {
+          name: "local",
+          configured: true,
+          key_present: false,
+          valid: true,
+          enabled_for_user: true,
+          model: state.runtimeSettings.model,
+          base_url: null,
+          status_code: null,
+          reason: "local backend is available",
+        },
+      ],
+    };
+    if (els.providerStatusHint) {
+      els.providerStatusHint.textContent = t("provider_status_failed");
+      els.providerStatusHint.className = "hint provider-status-hint warn";
+    }
+    showToast(t("provider_status_failed"), "info", 3600);
+  }
+
+  renderProviderSelect();
+}
+
+function providerChangeHandler() {
+  const next = String(els.providerSelect?.value || "local");
+  if (!providerEnabled(next)) {
+    renderProviderSelect();
+    return;
+  }
+  state.selectedProvider = next;
+  localStorage.setItem(PROVIDER_SELECTION_KEY, next);
+  updateProviderHint();
 }
 
 function normalizeStageKey(stage) {
@@ -573,7 +789,8 @@ function renderQueueList() {
     meta.className = "queue-item-meta";
     const shortJob = item.jobId ? String(item.jobId).slice(0, 8) : "-";
     const stage = stageLabel(item.stage || "-");
-    meta.textContent = `${queueStatusLabel(item.status)} · ${Number(item.progressPercent || 0).toFixed(1)}% · ${t("job_label")}: ${shortJob} · ${t("stage_label")}: ${stage}`;
+    const provider = providerLabel(item.provider || item.profile?.provider || "local");
+    meta.textContent = `${queueStatusLabel(item.status)} · ${provider} · ${Number(item.progressPercent || 0).toFixed(1)}% · ${t("job_label")}: ${shortJob} · ${t("stage_label")}: ${stage}`;
 
     row.appendChild(title);
     row.appendChild(removeBtn);
@@ -893,10 +1110,16 @@ function saveRuntimeSettingsFromInputs() {
 function buildTranscribeProfile() {
   const chunkMinutes = Number(state.runtimeSettings.chunkMinutes);
   const overlapMinutes = Number(state.runtimeSettings.chunkOverlapMinutes);
+  const provider = providerEnabled(state.selectedProvider) ? state.selectedProvider : "local";
+  const providerInfo = providerByName(provider);
+  const model = provider === "local"
+    ? state.runtimeSettings.model
+    : String(providerInfo?.model || "").trim();
 
   return {
     ...STABLE_PROFILE,
-    model: state.runtimeSettings.model,
+    provider,
+    model: model || state.runtimeSettings.model,
     chunk_minutes: String(chunkMinutes),
     chunk_overlap_minutes: String(overlapMinutes),
     chunk_min_duration_minutes: String(chunkMinutes),
@@ -929,12 +1152,16 @@ function openSettingsModal(mode = "settings") {
   setSettingsMode(mode);
   renderRuntimeSettings();
   loadHealth().catch(() => null);
+  loadProviderStatus().catch(() => null);
   openModal(els.settingsModal);
 }
 
 function closeAllModals() {
   closeModal(els.settingsModal);
   closeModal(els.promptModal);
+  if (state.localModelDownload.status && !state.localModelDownload.active) {
+    resolveLocalModelPrompt(false);
+  }
 }
 
 function currentFormatLabel(format, lang = state.uiLang) {
@@ -1117,6 +1344,216 @@ function buildFormFromQueueItem(item) {
   return form;
 }
 
+function isAuthLikeDownloadError(message) {
+  const text = String(message || "").toLowerCase();
+  return text.includes("401") || text.includes("403") || text.includes("unauthorized") || text.includes("forbidden") || text.includes("rate");
+}
+
+function setLocalModelProgress(percent, metaText) {
+  const shown = Math.max(0, Math.min(100, Number(percent || 0)));
+  if (els.localModelProgressBar) {
+    els.localModelProgressBar.style.width = `${shown}%`;
+  }
+  if (els.localModelProgressPercent) {
+    els.localModelProgressPercent.textContent = `${shown.toFixed(1)}%`;
+  }
+  if (els.localModelProgressMeta && metaText !== undefined) {
+    els.localModelProgressMeta.textContent = metaText;
+  }
+}
+
+function computeLocalModelDownloadProgress(jobs) {
+  const rows = Array.isArray(jobs) ? jobs : [];
+  if (!rows.length) {
+    return { percent: 0, meta: t("local_model_progress_waiting"), completed: 0, total: 0 };
+  }
+
+  const completed = rows.filter((job) => String(job.status || "").toLowerCase() === "completed").length;
+  const total = rows.length;
+  const knownTotal = rows.reduce((sum, job) => sum + Number(job.bytes_total || 0), 0);
+  const downloaded = rows.reduce((sum, job) => sum + Number(job.bytes_downloaded || 0), 0);
+  const percent = knownTotal > 0 ? (downloaded / knownTotal) * 100 : (completed / total) * 100;
+  const bytes = knownTotal > 0 ? `${formatBytes(downloaded)} / ${formatBytes(knownTotal)}` : "-";
+  return {
+    percent,
+    meta: t("local_model_progress_running", { done: completed, total, bytes }),
+    completed,
+    total,
+  };
+}
+
+function renderLocalModelModal() {
+  const status = state.localModelDownload.status;
+  if (!status) return;
+
+  const size = formatEstimatedSize(status);
+  if (els.localModelModalTitle) els.localModelModalTitle.textContent = t("local_model_missing_title");
+  if (els.localModelMessage && !state.localModelDownload.active) {
+    els.localModelMessage.textContent = t("local_model_missing_message", {
+      model: status.canonical_model || status.model || "-",
+      size,
+    });
+  }
+  if (els.localModelName) els.localModelName.textContent = status.canonical_model || status.model || "-";
+  if (els.localModelSize) els.localModelSize.textContent = size;
+  if (els.localModelRepo) els.localModelRepo.textContent = status.repo_id || "-";
+  if (els.btnLocalModelDownload) {
+    els.btnLocalModelDownload.textContent = t(state.localModelDownload.jobs.length ? "local_model_retry" : "local_model_download");
+  }
+  if (els.localModelProgressMeta && !state.localModelDownload.jobs.length && !state.localModelDownload.active) {
+    els.localModelProgressMeta.textContent = t("local_model_progress_waiting");
+  }
+}
+
+function setLocalModelTokenAttention(enabled) {
+  const field = els.localModelTokenInput?.closest(".model-token-field");
+  if (field) field.classList.toggle("attention", Boolean(enabled));
+}
+
+function resolveLocalModelPrompt(value) {
+  const resolver = state.localModelDownload.resolver;
+  state.localModelDownload.resolver = null;
+  state.localModelDownload.active = false;
+  state.localModelDownload.jobs = [];
+  state.localModelDownload.status = null;
+  closeModal(els.localModelModal);
+  setLocalModelTokenAttention(false);
+  if (resolver) resolver(Boolean(value));
+}
+
+function skipLocalModelDownloadPrompt() {
+  if (state.localModelDownload.active) return;
+  resolveLocalModelPrompt(false);
+}
+
+function openLocalModelPrompt(status) {
+  return new Promise((resolve) => {
+    state.localModelDownload.status = status;
+    state.localModelDownload.jobs = [];
+    state.localModelDownload.active = false;
+    state.localModelDownload.resolver = resolve;
+    setLocalModelTokenAttention(false);
+    if (els.localModelTokenInput) els.localModelTokenInput.value = "";
+    if (els.btnLocalModelDownload) els.btnLocalModelDownload.disabled = false;
+    if (els.btnLocalModelSkip) els.btnLocalModelSkip.disabled = false;
+    if (els.localModelModalClose) els.localModelModalClose.disabled = false;
+    setLocalModelProgress(0, t("local_model_progress_waiting"));
+    renderLocalModelModal();
+    openModal(els.localModelModal);
+  });
+}
+
+async function startLocalModelDownload() {
+  const status = state.localModelDownload.status;
+  if (!status || state.localModelDownload.active) return;
+
+  state.localModelDownload.active = true;
+  state.localModelDownload.jobs = [];
+  setLocalModelTokenAttention(false);
+  if (els.btnLocalModelDownload) els.btnLocalModelDownload.disabled = true;
+  if (els.btnLocalModelSkip) els.btnLocalModelSkip.disabled = true;
+  if (els.localModelModalClose) els.localModelModalClose.disabled = true;
+  if (els.localModelMessage) {
+    els.localModelMessage.textContent = t("local_model_progress_running", { done: 0, total: 0, bytes: "-" });
+  }
+
+  try {
+    const token = String(els.localModelTokenInput?.value || "").trim();
+    const batch = await apiFetch("/models/local/download", {
+      method: "POST",
+      body: {
+        model: status.canonical_model || status.model,
+        hf_token: token || undefined,
+      },
+      timeoutMs: 90000,
+    });
+    const jobs = Array.isArray(batch.items) ? batch.items : [];
+    state.localModelDownload.jobs = jobs;
+    if (!jobs.length) {
+      setLocalModelProgress(100, t("local_model_download_done"));
+      resolveLocalModelPrompt(true);
+      return;
+    }
+    await pollLocalModelDownloadJobs(jobs.map((job) => job.job_id).filter(Boolean));
+  } catch (err) {
+    failLocalModelDownload(err.message || String(err));
+  }
+}
+
+function failLocalModelDownload(message) {
+  state.localModelDownload.active = false;
+  if (els.btnLocalModelDownload) {
+    els.btnLocalModelDownload.disabled = false;
+    els.btnLocalModelDownload.textContent = t("local_model_retry");
+  }
+  if (els.btnLocalModelSkip) els.btnLocalModelSkip.disabled = false;
+  if (els.localModelModalClose) els.localModelModalClose.disabled = false;
+
+  const authLike = isAuthLikeDownloadError(message);
+  setLocalModelTokenAttention(authLike);
+  const text = authLike ? t("local_model_token_needed") : t("local_model_download_failed", { msg: message });
+  if (els.localModelMessage) els.localModelMessage.textContent = text;
+  setLocalModelProgress(0, t("local_model_download_failed", { msg: message }));
+}
+
+async function pollLocalModelDownloadJobs(jobIds) {
+  const ids = Array.isArray(jobIds) ? jobIds.filter(Boolean) : [];
+  if (!ids.length) {
+    resolveLocalModelPrompt(true);
+    return;
+  }
+
+  while (state.localModelDownload.active) {
+    const jobs = await Promise.all(
+      ids.map((jobId) => apiFetch(`/models/local/downloads/${encodeURIComponent(jobId)}`, { timeoutMs: 15000 }))
+    );
+    state.localModelDownload.jobs = jobs;
+    const progress = computeLocalModelDownloadProgress(jobs);
+    setLocalModelProgress(progress.percent, progress.meta);
+
+    const failed = jobs.find((job) => String(job.status || "").toLowerCase() === "failed");
+    if (failed) {
+      failLocalModelDownload(failed.error || "download failed");
+      return;
+    }
+
+    if (progress.completed === progress.total) {
+      setLocalModelProgress(100, t("local_model_download_done"));
+      if (els.localModelMessage) els.localModelMessage.textContent = t("local_model_download_done");
+      await sleep(450);
+      resolveLocalModelPrompt(true);
+      return;
+    }
+
+    await sleep(1200);
+  }
+}
+
+async function ensureLocalModelReady(model) {
+  setStatusByKey("status_local_model_checking", "warn");
+  let status;
+  try {
+    status = await apiFetch(`/models/local/status?model=${encodeURIComponent(model || "large-v3")}`, { timeoutMs: 20000 });
+  } catch (err) {
+    setStatusRaw(`${t("error_prefix")}: ${err.message || err}`, "bad");
+    showToast(`${t("error_prefix")}: ${err.message || err}`, "error", 4600);
+    return false;
+  }
+
+  if (status.present) {
+    return true;
+  }
+
+  const downloaded = await openLocalModelPrompt(status);
+  if (!downloaded) {
+    setStatusByKey("status_local_model_skipped", "warn");
+    toastByKey("status_local_model_skipped", "info");
+    return false;
+  }
+
+  return true;
+}
+
 async function runQueueItem(item) {
   if (item.cancelRequested) return;
 
@@ -1278,12 +1715,18 @@ async function transcribeHandler(event) {
   const vocabularyBias = String(els.vocabularyBiasInput?.value || "");
   localStorage.setItem(TRANSCRIBE_LANG_KEY, language);
 
+  if ((profile.provider || "local") === "local") {
+    const ready = await ensureLocalModelReady(profile.model);
+    if (!ready) return;
+  }
+
   state.queueCounter += 1;
   const item = {
     localId: `q-${Date.now()}-${state.queueCounter}`,
     sourceFilename: file.name || `file-${state.queueCounter}`,
     file,
     profile,
+    provider: profile.provider || "local",
     language,
     vocabularyBias,
     status: "waiting",
@@ -1409,6 +1852,7 @@ function attachEvents() {
   els.themeToggle?.addEventListener("click", toggleTheme);
 
   els.settingsBtn?.addEventListener("click", () => openSettingsModal("settings"));
+  els.providerSelect?.addEventListener("change", providerChangeHandler);
 
   els.modalTabSettings?.addEventListener("click", () => setSettingsMode("settings"));
   els.modalTabAbout?.addEventListener("click", () => setSettingsMode("about"));
@@ -1445,6 +1889,14 @@ function attachEvents() {
 
   bindModalClosing(els.settingsModal, els.settingsModalClose);
   bindModalClosing(els.promptModal, els.promptModalClose);
+  els.btnLocalModelDownload?.addEventListener("click", () => {
+    startLocalModelDownload().catch((err) => failLocalModelDownload(err.message || String(err)));
+  });
+  els.btnLocalModelSkip?.addEventListener("click", skipLocalModelDownloadPrompt);
+  els.localModelModalClose?.addEventListener("click", skipLocalModelDownloadPrompt);
+  els.localModelModal?.addEventListener("click", (event) => {
+    if (event.target === els.localModelModal) skipLocalModelDownloadPrompt();
+  });
 
   document.addEventListener("keydown", (event) => {
     if (event.key === "Escape") {
@@ -1461,6 +1913,7 @@ async function init() {
     els.promptLanguageSelect.value = state.uiLang === "en" ? "en" : "fa";
   }
   renderRuntimeSettings();
+  renderProviderSelect();
   applyOutputVisibility();
   updatePromptTemplate();
   attachEvents();
@@ -1468,6 +1921,7 @@ async function init() {
   renderQueueList();
   syncSelectedOutput({ animate: false });
   await loadHealth();
+  await loadProviderStatus();
   setStatusByKey("status_ready", "ok");
 }
 

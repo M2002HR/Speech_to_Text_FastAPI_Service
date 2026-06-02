@@ -12,7 +12,7 @@
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link rel="stylesheet" href="https://cdn-uicons.flaticon.com/uicons-regular-rounded/css/uicons-regular-rounded.css" />
   <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@500;700;800&family=Vazirmatn:wght@400;500;700&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="/ui-assets/user.css?v=20260521g" />
+  <link rel="stylesheet" href="/ui-assets/user.css?v=20260602c" />
 </head>
 <body>
   <div id="toastRoot" class="toast-root" aria-live="polite" aria-atomic="true"></div>
@@ -49,7 +49,16 @@
           <input id="fileInput" name="file" type="file" accept="audio/*,video/*" required />
         </label>
 
-        <div class="grid-2">
+        <div class="grid-3 provider-grid">
+          <label class="field provider-field">
+            <span class="field-head">
+              <span data-i18n="label_provider">موتور پردازش</span>
+              <button class="help-dot" type="button" data-i18n-title-key="tip_provider_help" aria-label="Provider help">?</button>
+            </span>
+            <select id="providerSelect" name="provider"></select>
+            <small id="providerStatusHint" class="hint provider-status-hint">...</small>
+          </label>
+
           <label class="field lang-field">
             <span class="field-head">
               <span data-i18n="label_language">زبان متن</span>
@@ -189,6 +198,57 @@
     </div>
   </div>
 
+  <div id="localModelModal" class="modal-backdrop hidden" role="dialog" aria-modal="true" aria-labelledby="localModelModalTitle">
+    <div class="modal-card model-card">
+      <div class="modal-head">
+        <h3 id="localModelModalTitle" data-i18n="local_model_missing_title">مدل لوکال آماده نیست</h3>
+        <button id="localModelModalClose" class="icon-btn small" type="button" data-i18n-title-key="tip_close" aria-label="Close">
+          <i class="fi fi-rr-circle-xmark" aria-hidden="true"></i>
+        </button>
+      </div>
+
+      <p id="localModelMessage" class="hint model-message">...</p>
+
+      <div class="model-download-summary">
+        <div>
+          <span data-i18n="settings_model">مدل</span>
+          <strong id="localModelName">-</strong>
+        </div>
+        <div>
+          <span data-i18n="local_model_size_label">حجم تقریبی</span>
+          <strong id="localModelSize">-</strong>
+        </div>
+        <div>
+          <span>Hugging Face</span>
+          <strong id="localModelRepo">-</strong>
+        </div>
+      </div>
+
+      <label class="field model-token-field">
+        <span data-i18n="local_model_token_label">توکن Hugging Face (در صورت نیاز)</span>
+        <input id="localModelTokenInput" type="password" data-i18n-placeholder="local_model_token_placeholder" placeholder="hf_..." autocomplete="off" />
+        <small id="localModelTokenHelp" class="hint">
+          <span data-i18n="local_model_token_help">برای مدل‌های عمومی معمولا لازم نیست. اگر خطای دسترسی/Rate limit دیدی، از این لینک token بساز:</span>
+          <a href="https://huggingface.co/settings/tokens" target="_blank" rel="noreferrer">huggingface.co/settings/tokens</a>
+        </small>
+      </label>
+
+      <div class="model-download-progress">
+        <div class="progress-head">
+          <strong data-i18n="label_progress">پیشرفت</strong>
+          <span id="localModelProgressPercent" class="chip">0.0%</span>
+        </div>
+        <div class="progress"><span id="localModelProgressBar"></span></div>
+        <p id="localModelProgressMeta" class="hint" data-i18n="local_model_progress_waiting">منتظر تصمیم شماست.</p>
+      </div>
+
+      <div class="actions model-actions">
+        <button id="btnLocalModelDownload" class="icon-btn primary text-btn" type="button" data-i18n="local_model_download">دانلود مدل</button>
+        <button id="btnLocalModelSkip" class="pill-btn" type="button" data-i18n="local_model_skip">فعلا اسکیپ کن</button>
+      </div>
+    </div>
+  </div>
+
   <div id="promptModal" class="modal-backdrop hidden" role="dialog" aria-modal="true" aria-labelledby="promptModalTitle">
     <div class="modal-card prompt-card">
       <div class="modal-head">
@@ -237,6 +297,6 @@
     </div>
   </div>
 
-  <script src="/ui-assets/user.js?v=20260521f" defer></script>
+  <script src="/ui-assets/user.js?v=20260602b" defer></script>
 </body>
 </html>
