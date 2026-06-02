@@ -15,7 +15,7 @@ class AppSection(BaseModel):
     name: str = "Tootak"
     version: str = "1.0.0"
     host: str = "0.0.0.0"
-    port: int = 8000
+    port: int = 8030
     log_level: str = "INFO"
     request_timeout_sec: float = 300.0
     enable_docs: bool = True

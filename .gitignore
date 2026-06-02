@@ -7,3 +7,4 @@ config/config.yml
 runtime/
 .reference_repo/
 .tmp_*
+.tools/

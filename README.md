@@ -25,7 +25,7 @@ Features:
 - `.env.example`: complete environment variable reference
 - `tests/`: API/config/service tests
 - `scripts/start.sh`: Linux/macOS startup script
-- `scripts/start.ps1`: Windows PowerShell startup script
+- `scripts/setup_and_start_windows.ps1`: complete Windows setup/start script
 
 ## Prerequisites
 
@@ -66,6 +66,39 @@ cp config/config.example.yml config/config.yml
 
 ### Windows (PowerShell)
 
+Full first-run setup without Docker:
+
+```powershell
+Set-ExecutionPolicy -Scope Process Bypass -Force
+.\scripts\setup_and_start_windows.ps1
+```
+
+Setup only, without starting the foreground API process:
+
+```powershell
+.\scripts\setup_and_start_windows.ps1 -NoStart
+```
+
+The script creates `.venv`, installs Python packages, creates `.env` and
+`config/config.yml` when missing, installs or downloads ffmpeg/ffprobe when
+needed, guides Hugging Face token setup when local model download is enabled,
+validates configured OpenAI/Groq keys when present, runs tests, starts a
+temporary API server for smoke checks, and then starts the API in foreground
+unless `-NoStart` is used.
+
+Useful skip flags:
+
+```powershell
+.\scripts\setup_and_start_windows.ps1 -NoStart -SkipPackageInstall -SkipLocalModelDownload -SkipHfTokenPrompt -SkipTests -SkipApiKeyValidation -SkipSmokeTests
+```
+
+If you want higher Hugging Face download limits, create a read token at
+`https://huggingface.co/settings/tokens` and either paste it when prompted or pass:
+
+```powershell
+.\scripts\setup_and_start_windows.ps1 -HfToken "hf_..."
+```
+
 ```powershell
 python -m venv .venv
 .\.venv\Scripts\Activate.ps1
@@ -79,7 +112,7 @@ Copy-Item config\config.example.yml config\config.yml
 ### Linux/macOS
 
 ```bash
-uvicorn api.app.main:app --host 0.0.0.0 --port 8000 --reload
+uvicorn api.app.main:app --host 0.0.0.0 --port 8030 --reload
 ```
 
 or
@@ -92,20 +125,20 @@ chmod +x scripts/start.sh
 ### Windows (PowerShell)
 
 ```powershell
-python -m uvicorn api.app.main:app --host 0.0.0.0 --port 8000 --reload
+python -m uvicorn api.app.main:app --host 0.0.0.0 --port 8030 --reload
 ```
 
 or
 
 ```powershell
-.\scripts\start.ps1
+.\scripts\setup_and_start_windows.ps1
 ```
 
 ## API Docs
 
-- Web UI: `http://127.0.0.1:8000/`
-- Swagger UI: `http://127.0.0.1:8000/docs`
-- ReDoc: `http://127.0.0.1:8000/redoc`
+- Web UI: `http://127.0.0.1:8030/`
+- Swagger UI: `http://127.0.0.1:8030/docs`
+- ReDoc: `http://127.0.0.1:8030/redoc`
 
 ## Core Endpoints
 
@@ -135,7 +168,7 @@ or
 ### Linux/macOS
 
 ```bash
-curl -X POST http://127.0.0.1:8000/transcribe \
+curl -X POST http://127.0.0.1:8030/transcribe \
   -F "file=@sample.mp4" \
   -F "provider=local" \
   -F "model=small" \
@@ -145,7 +178,7 @@ curl -X POST http://127.0.0.1:8000/transcribe \
 ### Windows (PowerShell with `curl.exe`)
 
 ```powershell
-curl.exe -X POST http://127.0.0.1:8000/transcribe `
+curl.exe -X POST http://127.0.0.1:8030/transcribe `
   -F "file=@sample.mp4" `
   -F "provider=local" `
   -F "model=small" `
