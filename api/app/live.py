@@ -16,6 +16,9 @@ _UI_DIR = Path(__file__).resolve().parent / "ui"
 _DEFAULT_GROQ_STT_MODEL = "whisper-large-v3-turbo"
 _DEFAULT_GROQ_LLM_MODEL = "openai/gpt-oss-120b"
 _MAX_LIVE_QUEUE_SIZE = 6
+_DEFAULT_LLM_CONTEXT_TOKENS = 300
+_DEFAULT_STT_CONTEXT_TOKENS = 160
+_MAX_STT_PROMPT_TOKENS = 224
 
 
 def install_live_routes(app: FastAPI) -> None:
@@ -124,6 +127,8 @@ class LiveSession:
             "llm_provider": llm_provider,
             "llm_model": llm_model,
             "llm_max_tokens": int(payload.get("llm_max_tokens") or 384),
+            "llm_context_tokens": _safe_positive_int(payload.get("llm_context_tokens") or os.getenv("LIVE_LLM_CONTEXT_TOKENS"), _DEFAULT_LLM_CONTEXT_TOKENS),
+            "stt_context_tokens": _safe_positive_int(payload.get("stt_context_tokens") or os.getenv("LIVE_STT_CONTEXT_TOKENS"), _DEFAULT_STT_CONTEXT_TOKENS),
         }
 
     def _public_config(self) -> Dict[str, Any]:
@@ -248,7 +253,11 @@ class LiveSession:
 
             raw_delta, self.raw_committed = _merge_delta(self.raw_committed, raw_text)
             clean_delta, self.clean_committed = _merge_delta(self.clean_committed, clean_text)
-            self.previous_context = self.clean_committed[-1400:]
+            context_budget = max(
+                _safe_positive_int(self.config.get("llm_context_tokens"), _DEFAULT_LLM_CONTEXT_TOKENS),
+                _safe_positive_int(self.config.get("stt_context_tokens"), _DEFAULT_STT_CONTEXT_TOKENS),
+            )
+            self.previous_context = _tail_tokens(self.clean_committed, context_budget)
 
             await self._send({
                 "type": "transcript",
@@ -264,6 +273,10 @@ class LiveSession:
                 "uncertain_spans": clean_payload.get("uncertain_spans", []),
                 "llm": clean_payload.get("llm", {}),
                 "usage": stt_result.get("usage", {}),
+                "context": {
+                    "llm_context_tokens": self.config.get("llm_context_tokens"),
+                    "stt_context_tokens": self.config.get("stt_context_tokens"),
+                },
                 "timing_ms": {
                     "stt": stt_ms,
                     "total": round((time.perf_counter() - started) * 1000.0, 2),
@@ -277,11 +290,18 @@ class LiveSession:
 
     async def _transcribe_chunk(self, audio_path: Path) -> Dict[str, Any]:
         provider = self.config["provider"]
+        prompt = self.config["prompt"]
+        if provider != "local":
+            prompt = _build_stt_prompt(
+                base_prompt=self.config["prompt"],
+                previous_context=self.previous_context,
+                context_tokens=_safe_positive_int(self.config.get("stt_context_tokens"), _DEFAULT_STT_CONTEXT_TOKENS),
+            )
         options = {
             "provider": provider,
             "model": self.config["stt_model"],
             "language": self.config["language"],
-            "prompt": self.config["prompt"],
+            "prompt": prompt,
             "response_format": "verbose_json",
             "temperature": 0.0,
             "word_timestamps": False,
@@ -314,6 +334,9 @@ class LiveSession:
         if not model:
             return {"cleaned_text": raw_text, "possible_missing_words": [], "uncertain_spans": [], "llm": {"enabled": False, "reason": "empty_llm_model"}}
 
+        llm_context_tokens = _safe_positive_int(self.config.get("llm_context_tokens"), _DEFAULT_LLM_CONTEXT_TOKENS)
+        previous_context = _tail_tokens(self.previous_context, llm_context_tokens)
+
         url = _join_provider_path(provider.base_url, "/v1/chat/completions")
         headers = {"Authorization": f"Bearer {provider.all_api_keys()[0]}", "Content-Type": "application/json"}
         payload = {
@@ -325,21 +348,23 @@ class LiveSession:
                 {
                     "role": "system",
                     "content": (
-                        "تو ویراستار بلادرنگ ترنسکریپت فارسی هستی. فقط نویزهای آشکار ASR، تکرارهای بی‌معنا، "
-                        "فاصله‌گذاری و املای واضح را اصلاح کن. خلاصه‌سازی، اضافه‌کردن اطلاعات جدید و حدس قطعی ممنوع است. "
-                        "اگر بخشی احتمالاً افتاده یا نامفهوم است آن را در possible_missing_words یا uncertain_spans گزارش کن، "
-                        "اما متن ساختگی وارد cleaned_text نکن. خروجی فقط JSON معتبر باشد."
+                        "تو ویراستار بلادرنگ ترنسکریپت فارسی هستی. previous_context فقط برای فهم جمله، ضمیر، اصطلاحات و پیوستگی است. "
+                        "فقط raw_transcript_chunk را پاکسازی کن و متن قبلی را دوباره در cleaned_text تکرار نکن. "
+                        "فقط نویزهای آشکار ASR، تکرارهای بی‌معنا، فاصله‌گذاری و املای واضح را اصلاح کن. "
+                        "خلاصه‌سازی، اضافه‌کردن اطلاعات جدید و حدس قطعی ممنوع است. اگر بخشی احتمالاً افتاده یا نامفهوم است "
+                        "آن را در possible_missing_words یا uncertain_spans گزارش کن، اما متن ساختگی وارد cleaned_text نکن. خروجی فقط JSON معتبر باشد."
                     ),
                 },
                 {
                     "role": "user",
                     "content": json.dumps(
                         {
-                            "previous_context": self.previous_context[-900:],
+                            "previous_context": previous_context,
+                            "previous_context_token_budget": llm_context_tokens,
                             "raw_transcript_chunk": raw_text,
                             "quality_flags": quality_flags,
                             "required_json_schema": {
-                                "cleaned_text": "string",
+                                "cleaned_text": "string; cleaned version of raw_transcript_chunk only",
                                 "possible_missing_words": ["string"],
                                 "uncertain_spans": ["string"],
                                 "notes": "string",
@@ -368,6 +393,7 @@ class LiveSession:
                 "enabled": True,
                 "provider": provider_name,
                 "model": model,
+                "context_tokens": llm_context_tokens,
                 "process_ms": round((time.perf_counter() - started) * 1000.0, 2),
             }
             return parsed
@@ -430,6 +456,41 @@ def _join_provider_path(base_url: str, path: str) -> str:
     if base.endswith("/v1") and path.startswith("/v1/"):
         return base + path[3:]
     return base + "/" + path.lstrip("/")
+
+
+def _safe_positive_int(value: Any, default: int) -> int:
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        return default
+    return parsed if parsed > 0 else default
+
+
+def _tail_tokens(text: str, max_tokens: int) -> str:
+    words = str(text or "").split()
+    if not words:
+        return ""
+    return " ".join(words[-max(1, int(max_tokens)):])
+
+
+def _limit_tokens(text: str, max_tokens: int) -> str:
+    words = str(text or "").split()
+    if len(words) <= max_tokens:
+        return " ".join(words)
+    return " ".join(words[-max_tokens:])
+
+
+def _build_stt_prompt(base_prompt: str, previous_context: str, context_tokens: int) -> str:
+    base = " ".join(str(base_prompt or "").split())
+    context = _tail_tokens(previous_context, min(max(0, int(context_tokens)), _MAX_STT_PROMPT_TOKENS - 32))
+    if not context:
+        return _limit_tokens(base, _MAX_STT_PROMPT_TOKENS)
+    prompt = (
+        f"{base}\n"
+        "متن قبلی فقط برای حفظ پیوستگی، املای اصطلاحات و سبک گفتار است؛ ادامه متن را از روی آن حدس نزن:\n"
+        f"{context}"
+    ).strip()
+    return _limit_tokens(prompt, _MAX_STT_PROMPT_TOKENS)
 
 
 def _suffix_for_mime(mime_type: str) -> str:
