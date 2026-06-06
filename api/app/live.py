@@ -13,7 +13,7 @@ from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse
 
 _UI_DIR = Path(__file__).resolve().parent / "ui"
-_DEFAULT_GROQ_STT_MODEL = "whisper-large-v3-turbo"
+_DEFAULT_GROQ_STT_MODEL = "whisper-large-v3"
 _DEFAULT_GROQ_LLM_MODEL = "openai/gpt-oss-120b"
 _MAX_LIVE_QUEUE_SIZE = 6
 _DEFAULT_LLM_CONTEXT_TOKENS = 300
@@ -96,7 +96,7 @@ class LiveSession:
             provider = "groq"
 
         stt_model = str(payload.get("stt_model") or payload.get("model") or os.getenv("LIVE_STT_MODEL") or "").strip()
-        if provider == "groq" and not stt_model:
+        if provider == "groq" and (not stt_model or stt_model == "whisper-large-v3-turbo"):
             stt_model = _DEFAULT_GROQ_STT_MODEL
         elif provider == "local" and not stt_model:
             stt_model = self.settings.local.model_id
@@ -122,6 +122,7 @@ class LiveSession:
             "stt_model": stt_model,
             "language": str(payload.get("language") or os.getenv("LIVE_LANGUAGE") or "fa").strip().lower() or "fa",
             "prompt": str(payload.get("prompt") or "کلاس دانشگاهی به زبان فارسی. اصطلاحات تخصصی را با املای درست حفظ کن.").strip(),
+            "audio_topic": str(payload.get("audio_topic") or os.getenv("LIVE_AUDIO_TOPIC") or "").strip(),
             "mime_type": mime_type,
             "llm_enabled": bool(payload.get("llm_enabled", os.getenv("LIVE_LLM_ENABLED", "true").lower() not in {"0", "false", "no", "off"})),
             "llm_provider": llm_provider,
@@ -274,6 +275,7 @@ class LiveSession:
                 "llm": clean_payload.get("llm", {}),
                 "usage": stt_result.get("usage", {}),
                 "context": {
+                    "audio_topic": self.config.get("audio_topic"),
                     "llm_context_tokens": self.config.get("llm_context_tokens"),
                     "stt_context_tokens": self.config.get("stt_context_tokens"),
                 },
@@ -294,6 +296,7 @@ class LiveSession:
         if provider != "local":
             prompt = _build_stt_prompt(
                 base_prompt=self.config["prompt"],
+                audio_topic=self.config.get("audio_topic", ""),
                 previous_context=self.previous_context,
                 context_tokens=_safe_positive_int(self.config.get("stt_context_tokens"), _DEFAULT_STT_CONTEXT_TOKENS),
             )
@@ -336,6 +339,7 @@ class LiveSession:
 
         llm_context_tokens = _safe_positive_int(self.config.get("llm_context_tokens"), _DEFAULT_LLM_CONTEXT_TOKENS)
         previous_context = _tail_tokens(self.previous_context, llm_context_tokens)
+        audio_topic = str(self.config.get("audio_topic") or "").strip()
 
         url = _join_provider_path(provider.base_url, "/v1/chat/completions")
         headers = {"Authorization": f"Bearer {provider.all_api_keys()[0]}", "Content-Type": "application/json"}
@@ -348,7 +352,7 @@ class LiveSession:
                 {
                     "role": "system",
                     "content": (
-                        "تو ویراستار بلادرنگ ترنسکریپت فارسی هستی. previous_context فقط برای فهم جمله، ضمیر، اصطلاحات و پیوستگی است. "
+                        "تو ویراستار بلادرنگ ترنسکریپت فارسی هستی. audio_topic و previous_context فقط برای فهم موضوع، جمله، ضمیر، اصطلاحات و پیوستگی است. "
                         "فقط raw_transcript_chunk را پاکسازی کن و متن قبلی را دوباره در cleaned_text تکرار نکن. "
                         "فقط نویزهای آشکار ASR، تکرارهای بی‌معنا، فاصله‌گذاری و املای واضح را اصلاح کن. "
                         "خلاصه‌سازی، اضافه‌کردن اطلاعات جدید و حدس قطعی ممنوع است. اگر بخشی احتمالاً افتاده یا نامفهوم است "
@@ -359,6 +363,7 @@ class LiveSession:
                     "role": "user",
                     "content": json.dumps(
                         {
+                            "audio_topic": audio_topic,
                             "previous_context": previous_context,
                             "previous_context_token_budget": llm_context_tokens,
                             "raw_transcript_chunk": raw_text,
@@ -394,6 +399,7 @@ class LiveSession:
                 "provider": provider_name,
                 "model": model,
                 "context_tokens": llm_context_tokens,
+                "audio_topic_used": bool(audio_topic),
                 "process_ms": round((time.perf_counter() - started) * 1000.0, 2),
             }
             return parsed
@@ -480,17 +486,20 @@ def _limit_tokens(text: str, max_tokens: int) -> str:
     return " ".join(words[-max_tokens:])
 
 
-def _build_stt_prompt(base_prompt: str, previous_context: str, context_tokens: int) -> str:
+def _build_stt_prompt(base_prompt: str, audio_topic: str, previous_context: str, context_tokens: int) -> str:
+    parts: List[str] = []
     base = " ".join(str(base_prompt or "").split())
-    context = _tail_tokens(previous_context, min(max(0, int(context_tokens)), _MAX_STT_PROMPT_TOKENS - 32))
-    if not context:
-        return _limit_tokens(base, _MAX_STT_PROMPT_TOKENS)
-    prompt = (
-        f"{base}\n"
-        "متن قبلی فقط برای حفظ پیوستگی، املای اصطلاحات و سبک گفتار است؛ ادامه متن را از روی آن حدس نزن:\n"
-        f"{context}"
-    ).strip()
-    return _limit_tokens(prompt, _MAX_STT_PROMPT_TOKENS)
+    topic = " ".join(str(audio_topic or "").split())
+    if base:
+        parts.append(base)
+    if topic:
+        parts.append(f"موضوع صدا: {topic}")
+    context_budget = min(max(0, int(context_tokens)), _MAX_STT_PROMPT_TOKENS - 48)
+    context = _tail_tokens(previous_context, context_budget)
+    if context:
+        parts.append("متن قبلی فقط برای حفظ پیوستگی، املای اصطلاحات و سبک گفتار است؛ ادامه متن را از روی آن حدس نزن:")
+        parts.append(context)
+    return _limit_tokens("\n".join(parts), _MAX_STT_PROMPT_TOKENS)
 
 
 def _suffix_for_mime(mime_type: str) -> str:
