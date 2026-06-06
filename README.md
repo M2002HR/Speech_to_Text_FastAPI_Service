@@ -148,6 +148,14 @@ or
 - `POST /transcribe/jobs`
 - `GET /transcribe/jobs`
 - `GET /transcribe/jobs/{job_id}`
+- `POST /transcribe/jobs/{job_id}/retry`
+
+For Groq/OpenAI fallback keys, keep the primary key in `PROVIDER_GROQ_API_KEY`
+or `PROVIDER_OPENAI_API_KEY` and put additional comma-separated keys in
+`PROVIDER_GROQ_API_KEYS` or `PROVIDER_OPENAI_API_KEYS`. Retryable upstream
+errors such as rate limits rotate to the next configured key. Failed chunked
+API jobs keep checkpoint state under `runtime/checkpoints/` so retry can resume
+from completed chunks.
 
 ## Admin Endpoints
 

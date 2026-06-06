@@ -534,7 +534,7 @@ textarea:focus {
   color: var(--text);
   padding: 0.28rem 0.42rem;
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-columns: minmax(0, 1fr) auto auto;
   align-items: start;
   gap: 0.1rem;
   text-align: start;
@@ -560,7 +560,8 @@ textarea:focus {
   text-overflow: ellipsis;
 }
 
-.queue-item-delete {
+.queue-item-delete,
+.queue-item-retry {
   grid-column: 2;
   width: 1.28rem;
   height: 1.28rem;
@@ -578,9 +579,18 @@ textarea:focus {
   justify-content: center;
 }
 
+.queue-item-retry {
+  grid-column: 3;
+}
+
 .queue-item-delete:hover {
   border-color: var(--bad);
   color: var(--bad);
+}
+
+.queue-item-retry:hover {
+  border-color: var(--ok);
+  color: var(--ok);
 }
 
 .queue-item-meta {
@@ -834,6 +844,57 @@ html[dir="ltr"] .toast-root {
   padding: 0.48rem;
 }
 
+.provider-settings-box {
+  display: grid;
+  gap: 0.5rem;
+}
+
+.provider-settings-head,
+.provider-settings-title {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.6rem;
+}
+
+.provider-settings-list {
+  display: grid;
+  gap: 0.55rem;
+}
+
+.provider-settings-card {
+  display: grid;
+  gap: 0.46rem;
+  border: 1px dashed var(--line-soft);
+  border-radius: 12px;
+  padding: 0.5rem;
+  background: color-mix(in srgb, var(--paper) 74%, transparent);
+}
+
+.provider-config-grid {
+  grid-template-columns: 1.1fr 0.9fr;
+}
+
+.provider-key-list {
+  display: grid;
+  gap: 0.34rem;
+}
+
+.provider-key-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto minmax(6rem, auto);
+  gap: 0.32rem;
+  align-items: center;
+}
+
+.provider-key-status.ok {
+  color: var(--ok);
+}
+
+.provider-key-status.bad {
+  color: var(--bad);
+}
+
 .health-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -904,6 +965,8 @@ html[dir="ltr"] .toast-root {
   .grid-2,
   .grid-3,
   .model-download-summary,
+  .provider-config-grid,
+  .provider-key-row,
   .health-grid {
     grid-template-columns: 1fr;
   }

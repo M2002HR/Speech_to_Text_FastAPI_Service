@@ -12,7 +12,7 @@
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link rel="stylesheet" href="https://cdn-uicons.flaticon.com/uicons-regular-rounded/css/uicons-regular-rounded.css" />
   <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@500;700;800&family=Vazirmatn:wght@400;500;700&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="/ui-assets/user.css?v=20260602c" />
+  <link rel="stylesheet" href="/ui-assets/user.css?v=20260602e" />
 </head>
 <body>
   <div id="toastRoot" class="toast-root" aria-live="polite" aria-atomic="true"></div>
@@ -177,6 +177,14 @@
           </div>
         </div>
 
+        <div class="service-box provider-settings-box">
+          <div class="provider-settings-head">
+            <h4>API Providers</h4>
+            <span id="providerSettingsHint" class="hint">Saved in .env</span>
+          </div>
+          <div id="providerSettingsList" class="provider-settings-list"></div>
+        </div>
+
         <div class="service-box">
           <h4 data-i18n="settings_service_title">وضعیت سرویس</h4>
           <div class="health-grid">
@@ -297,6 +305,6 @@
     </div>
   </div>
 
-  <script src="/ui-assets/user.js?v=20260602b" defer></script>
+  <script src="/ui-assets/user.js?v=20260602e" defer></script>
 </body>
 </html>

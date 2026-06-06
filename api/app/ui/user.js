@@ -139,6 +139,7 @@ const I18N = {
     queue_status_failed: "ناموفق",
     queue_status_cancelled: "لغو",
     queue_remove: "حذف از صف",
+    queue_retry: "Retry",
     settings_title: "تنظیمات",
     settings_tab: "تنظیمات",
     about_tab: "درباره ما",
@@ -273,6 +274,7 @@ const I18N = {
     queue_status_failed: "failed",
     queue_status_cancelled: "cancelled",
     queue_remove: "Remove from queue",
+    queue_retry: "Retry",
     settings_title: "Settings",
     settings_tab: "Settings",
     about_tab: "About",
@@ -370,6 +372,8 @@ const els = {
   settingOutputEnabled: $("settingOutputEnabled"),
   btnSaveRuntimeSettings: $("btnSaveRuntimeSettings"),
   settingsSaveHint: $("settingsSaveHint"),
+  providerSettingsList: $("providerSettingsList"),
+  providerSettingsHint: $("providerSettingsHint"),
 
   modalHealthStatus: $("modalHealthStatus"),
   modalFfmpegStatus: $("modalFfmpegStatus"),
@@ -413,6 +417,7 @@ const state = {
   runtimeSettings: { ...DEFAULT_RUNTIME_SETTINGS },
   providerStatus: null,
   selectedProvider: localStorage.getItem(PROVIDER_SELECTION_KEY) || "local",
+  providerSettings: null,
   localModelDownload: {
     status: null,
     jobs: [],
@@ -720,6 +725,215 @@ function providerChangeHandler() {
   updateProviderHint();
 }
 
+function normalizeProviderSettingsPayload(payload) {
+  const providers = Array.isArray(payload?.providers) ? payload.providers : [];
+  const defaults = {
+    openai: {
+      name: "openai",
+      enabled: false,
+      base_url: "https://api.openai.com",
+      model: "whisper-1",
+      transcriptions_path: "/v1/audio/transcriptions",
+      timeout_sec: 300,
+      api_keys: [],
+    },
+    groq: {
+      name: "groq",
+      enabled: false,
+      base_url: "https://api.groq.com/openai",
+      model: "whisper-large-v3",
+      transcriptions_path: "/v1/audio/transcriptions",
+      timeout_sec: 300,
+      api_keys: [],
+    },
+  };
+
+  providers.forEach((item) => {
+    const name = String(item?.name || "").toLowerCase();
+    if (!defaults[name]) return;
+    defaults[name] = {
+      ...defaults[name],
+      ...item,
+      name,
+      api_keys: Array.isArray(item.api_keys) ? item.api_keys : [],
+    };
+  });
+
+  return {
+    env_path: String(payload?.env_path || ".env"),
+    providers: [defaults.openai, defaults.groq],
+  };
+}
+
+function renderProviderSettings() {
+  if (!els.providerSettingsList) return;
+  const settings = normalizeProviderSettingsPayload(state.providerSettings);
+  state.providerSettings = settings;
+  els.providerSettingsList.innerHTML = "";
+
+  settings.providers.forEach((provider) => {
+    const card = document.createElement("div");
+    card.className = "provider-settings-card";
+    card.dataset.provider = provider.name;
+
+    const keys = provider.api_keys.length ? provider.api_keys : [""];
+    const keyRows = keys.map((key, idx) => `
+      <div class="provider-key-row" data-key-index="${idx}">
+        <input class="provider-key-input" type="password" value="${escapeHtml(key)}" placeholder="${provider.name} api key" autocomplete="off" />
+        <button class="pill-btn provider-key-test" type="button" data-provider="${provider.name}" data-key-index="${idx}">Test</button>
+        <button class="pill-btn provider-key-remove" type="button" data-provider="${provider.name}" data-key-index="${idx}">Remove</button>
+        <span class="hint provider-key-status"></span>
+      </div>
+    `).join("");
+
+    card.innerHTML = `
+      <div class="provider-settings-title">
+        <strong>${providerLabel(provider.name)}</strong>
+        <label class="switch-field">
+          <input class="provider-enabled-input" type="checkbox" ${provider.enabled ? "checked" : ""} />
+          <span class="hint">Enabled</span>
+        </label>
+      </div>
+      <div class="grid-2 compact provider-config-grid">
+        <label class="field">
+          <span>Base URL</span>
+          <input class="provider-base-url-input" type="text" value="${escapeHtml(provider.base_url || "")}" />
+        </label>
+        <label class="field">
+          <span>Model</span>
+          <input class="provider-model-input" type="text" value="${escapeHtml(provider.model || "")}" />
+        </label>
+      </div>
+      <div class="provider-key-list">${keyRows}</div>
+      <button class="pill-btn provider-key-add" type="button" data-provider="${provider.name}">Add key</button>
+    `;
+    els.providerSettingsList.appendChild(card);
+  });
+
+  if (els.providerSettingsHint) {
+    els.providerSettingsHint.textContent = `Saved in ${settings.env_path}`;
+  }
+}
+
+function escapeHtml(value) {
+  return String(value || "")
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;");
+}
+
+async function loadProviderSettings() {
+  try {
+    state.providerSettings = await apiFetch("/providers/settings", { timeoutMs: 12000 });
+  } catch (err) {
+    state.providerSettings = normalizeProviderSettingsPayload(null);
+    if (els.providerSettingsHint) {
+      els.providerSettingsHint.textContent = `Provider settings load failed: ${err.message || err}`;
+    }
+  }
+  renderProviderSettings();
+}
+
+function collectProviderSettingsFromInputs() {
+  const providers = [];
+  els.providerSettingsList?.querySelectorAll(".provider-settings-card").forEach((card) => {
+    const name = String(card.getAttribute("data-provider") || "");
+    const keys = Array.from(card.querySelectorAll(".provider-key-input"))
+      .map((input) => String(input.value || "").trim())
+      .filter(Boolean);
+    providers.push({
+      name,
+      enabled: Boolean(card.querySelector(".provider-enabled-input")?.checked),
+      base_url: String(card.querySelector(".provider-base-url-input")?.value || "").trim(),
+      model: String(card.querySelector(".provider-model-input")?.value || "").trim(),
+      transcriptions_path: "/v1/audio/transcriptions",
+      timeout_sec: 300,
+      api_keys: keys,
+    });
+  });
+  return { providers };
+}
+
+function addProviderKeyRow(providerName) {
+  const card = els.providerSettingsList?.querySelector(`.provider-settings-card[data-provider="${providerName}"]`);
+  const list = card?.querySelector(".provider-key-list");
+  if (!list) return;
+  const idx = list.querySelectorAll(".provider-key-row").length;
+  const row = document.createElement("div");
+  row.className = "provider-key-row";
+  row.setAttribute("data-key-index", String(idx));
+  row.innerHTML = `
+    <input class="provider-key-input" type="password" value="" placeholder="${providerName} api key" autocomplete="off" />
+    <button class="pill-btn provider-key-test" type="button" data-provider="${providerName}" data-key-index="${idx}">Test</button>
+    <button class="pill-btn provider-key-remove" type="button" data-provider="${providerName}" data-key-index="${idx}">Remove</button>
+    <span class="hint provider-key-status"></span>
+  `;
+  list.appendChild(row);
+  row.querySelector(".provider-key-input")?.focus();
+}
+
+async function testProviderKey(button) {
+  const providerName = String(button.getAttribute("data-provider") || "");
+  const row = button.closest(".provider-key-row");
+  const card = button.closest(".provider-settings-card");
+  const key = String(row?.querySelector(".provider-key-input")?.value || "").trim();
+  const statusEl = row?.querySelector(".provider-key-status");
+  if (!key) {
+    if (statusEl) statusEl.textContent = "Key is empty";
+    return;
+  }
+  if (statusEl) statusEl.textContent = "Testing...";
+  button.disabled = true;
+  try {
+    const out = await apiFetch("/providers/settings/test-key", {
+      method: "POST",
+      body: {
+        provider: providerName,
+        api_key: key,
+        base_url: String(card?.querySelector(".provider-base-url-input")?.value || "").trim(),
+      },
+      timeoutMs: 45000,
+    });
+    if (statusEl) {
+      statusEl.textContent = out.valid ? `Valid (${out.reason || "ok"})` : `Invalid: ${out.reason || out.status_code || "-"}`;
+      statusEl.className = `hint provider-key-status ${out.valid ? "ok" : "bad"}`;
+    }
+  } catch (err) {
+    if (statusEl) {
+      statusEl.textContent = `Failed: ${err.message || err}`;
+      statusEl.className = "hint provider-key-status bad";
+    }
+  } finally {
+    button.disabled = false;
+  }
+}
+
+async function saveProviderSettingsFromInputs() {
+  const payload = collectProviderSettingsFromInputs();
+  const saved = await apiFetch("/providers/settings", {
+    method: "PUT",
+    body: payload,
+    timeoutMs: 30000,
+  });
+  state.providerSettings = saved;
+  renderProviderSettings();
+  await loadProviderStatus();
+}
+
+async function saveAllSettingsFromInputs() {
+  const runtimeOk = saveRuntimeSettingsFromInputs();
+  if (!runtimeOk) return;
+  try {
+    await saveProviderSettingsFromInputs();
+    setStatusByKey("status_settings_saved", "ok");
+    toastByKey("status_settings_saved", "success");
+  } catch (err) {
+    setStatusRaw(`${t("error_prefix")}: ${err.message || err}`, "bad");
+    showToast(`${t("error_prefix")}: ${err.message || err}`, "error", 5200);
+  }
+}
+
 function normalizeStageKey(stage) {
   const clean = String(stage || "").trim().toLowerCase();
   if (!clean) return "";
@@ -785,6 +999,18 @@ function renderQueueList() {
     removeBtn.setAttribute("data-local-id", item.localId);
     removeBtn.textContent = "×";
 
+    const retryBtn = document.createElement("button");
+    retryBtn.type = "button";
+    retryBtn.className = "queue-item-retry";
+    retryBtn.setAttribute("aria-label", t("queue_retry"));
+    retryBtn.setAttribute("title", t("queue_retry"));
+    retryBtn.setAttribute("data-tooltip", t("queue_retry"));
+    retryBtn.setAttribute("data-local-id", item.localId);
+    retryBtn.textContent = "R";
+    if (item.status !== "failed" || !item.jobId) {
+      retryBtn.classList.add("hidden");
+    }
+
     const meta = document.createElement("span");
     meta.className = "queue-item-meta";
     const shortJob = item.jobId ? String(item.jobId).slice(0, 8) : "-";
@@ -794,6 +1020,7 @@ function renderQueueList() {
 
     row.appendChild(title);
     row.appendChild(removeBtn);
+    row.appendChild(retryBtn);
     row.appendChild(meta);
     els.jobQueueList.appendChild(row);
   });
@@ -817,9 +1044,14 @@ function syncSelectedOutput({ animate = false } = {}) {
   setProgress(Number(item.progressPercent || 0), item.stage || "queued", item.jobId || "-");
 
   if (item.status === "failed" || item.status === "cancelled") {
-    resetStream();
+    const savedText = String(item.latestText || "").trim();
     if (els.transcribeResult) {
-      els.transcribeResult.textContent = `${t("error_prefix")}: ${item.error || item.status}`;
+      if (savedText) {
+        setStreamTarget(`${savedText}\n\n---\n${t("error_prefix")}: ${item.error || item.status}`, { immediate: !animate });
+      } else {
+        resetStream();
+        els.transcribeResult.textContent = `${t("error_prefix")}: ${item.error || item.status}`;
+      }
     }
     return;
   }
@@ -881,6 +1113,37 @@ function removeQueueItem(localId) {
   } else {
     setStatusByKey("status_removed_from_queue", "ok");
     toastByKey("status_removed_from_queue", "success");
+  }
+}
+
+async function retryQueueItem(localId) {
+  const item = state.queueItems.find((x) => x.localId === localId);
+  if (!item || !item.jobId || item.status !== "failed") return;
+
+  item.status = "pending";
+  item.stage = "queued";
+  item.error = "";
+  item.cancelRequested = false;
+  item.cancelSignalSent = false;
+  renderQueueList();
+  setSelectedQueueItem(item.localId, { animate: false });
+  setStatusByKey("status_queued", "warn");
+
+  try {
+    const job = await apiFetch(`/transcribe/jobs/${item.jobId}/retry`, { method: "POST", timeoutMs: 20000 });
+    item.status = String(job.status || "pending").toLowerCase();
+    item.stage = job.stage || "queued";
+    item.progressPercent = Number(job.progress_percent || item.progressPercent || 0);
+    renderQueueList();
+    await monitorQueueItem(item);
+  } catch (err) {
+    item.status = "failed";
+    item.stage = "failed";
+    item.error = err.message || String(err);
+    renderQueueList();
+    syncSelectedOutput({ animate: false });
+    setStatusByKey("status_failed_start", "bad");
+    toastByKey("status_failed_start", "error");
   }
 }
 
@@ -1153,6 +1416,7 @@ function openSettingsModal(mode = "settings") {
   renderRuntimeSettings();
   loadHealth().catch(() => null);
   loadProviderStatus().catch(() => null);
+  loadProviderSettings().catch(() => null);
   openModal(els.settingsModal);
 }
 
@@ -1554,6 +1818,97 @@ async function ensureLocalModelReady(model) {
   return true;
 }
 
+async function monitorQueueItem(item) {
+  item.pollErrorCount = 0;
+
+  while (true) {
+    if (item.cancelRequested && item.jobId && !item.cancelSignalSent) {
+      item.cancelSignalSent = true;
+      await apiFetch(`/transcribe/jobs/${item.jobId}/cancel`, { method: "POST", timeoutMs: 10000 }).catch(() => null);
+    }
+
+    let job;
+    try {
+      job = await apiFetch(`/transcribe/jobs/${item.jobId}`, { timeoutMs: 45000 });
+      item.pollErrorCount = 0;
+    } catch (err) {
+      item.pollErrorCount = Number(item.pollErrorCount || 0) + 1;
+      const msg = err.message || String(err);
+      if (msg.startsWith("404:") || msg.startsWith("410:")) {
+        item.status = "failed";
+        item.stage = "failed";
+        item.error = msg;
+        renderQueueList();
+        syncSelectedOutput({ animate: false });
+        setStatusByKey("status_failed", "bad");
+        toastByKey("status_failed", "error");
+        break;
+      }
+      setStatusByKey("status_poll_error", "warn", { msg });
+      item.error = msg;
+      renderQueueList();
+      await sleep(Math.min(8000, 1200 + item.pollErrorCount * 700));
+      continue;
+    }
+
+    item.status = String(job.status || item.status || "").toLowerCase();
+    item.stage = job.stage || item.stage || "-";
+    item.progressPercent = Number(job.progress_percent || 0);
+
+    if (job.result && typeof job.result === "object") {
+      item.result = job.result;
+      const partialText = String(job.result.text || "");
+      if (partialText && partialText.length >= item.latestText.length) {
+        item.latestText = partialText;
+      }
+    }
+
+    renderQueueList();
+    if (state.selectedQueueLocalId === item.localId) {
+      syncSelectedOutput({ animate: true });
+    }
+
+    if (item.status === "completed") {
+      item.progressPercent = 100;
+      item.stage = "completed";
+      if (item.result && typeof item.result === "object") {
+        item.latestText = String(item.result.text || item.latestText || "");
+      }
+      renderQueueList();
+      if (state.selectedQueueLocalId === item.localId) {
+        state.stream.charsPerSec = Math.min(320, Math.max(state.stream.charsPerSec, 120));
+        syncSelectedOutput({ animate: true });
+      }
+      if (!item.cancelRequested) {
+        setStatusByKey("status_success", "ok");
+        toastByKey("status_success", "success");
+      }
+      break;
+    }
+
+    if (item.status === "failed" || item.status === "cancelled") {
+      item.error = job.error || item.error || item.status;
+      renderQueueList();
+      if (state.selectedQueueLocalId === item.localId) {
+        syncSelectedOutput({ animate: false });
+      }
+      if (!item.cancelRequested) {
+        setStatusByKey("status_failed", "bad");
+        toastByKey("status_failed", "error");
+      }
+      break;
+    }
+
+    if (item.status === "pending") {
+      setStatusByKey("status_queued", "warn");
+    } else if (item.status === "running") {
+      setStatusByKey("status_running", "warn");
+    }
+
+    await sleep(1200);
+  }
+}
+
 async function runQueueItem(item) {
   if (item.cancelRequested) return;
 
@@ -1590,70 +1945,7 @@ async function runQueueItem(item) {
       syncSelectedOutput({ animate: false });
     }
     setStatusByKey("status_job_started", "warn");
-
-    while (true) {
-      if (item.cancelRequested && item.jobId && !item.cancelSignalSent) {
-        item.cancelSignalSent = true;
-        await apiFetch(`/transcribe/jobs/${item.jobId}/cancel`, { method: "POST", timeoutMs: 10000 }).catch(() => null);
-      }
-
-      const job = await apiFetch(`/transcribe/jobs/${item.jobId}`);
-      item.status = String(job.status || item.status || "").toLowerCase();
-      item.stage = job.stage || item.stage || "-";
-      item.progressPercent = Number(job.progress_percent || 0);
-
-      if (job.result && typeof job.result === "object") {
-        item.result = job.result;
-        const partialText = String(job.result.text || "");
-        if (partialText && partialText.length >= item.latestText.length) {
-          item.latestText = partialText;
-        }
-      }
-
-      renderQueueList();
-      if (state.selectedQueueLocalId === item.localId) {
-        syncSelectedOutput({ animate: true });
-      }
-
-      if (item.status === "completed") {
-        item.progressPercent = 100;
-        item.stage = "completed";
-        if (item.result && typeof item.result === "object") {
-          item.latestText = String(item.result.text || item.latestText || "");
-        }
-        renderQueueList();
-        if (state.selectedQueueLocalId === item.localId) {
-          state.stream.charsPerSec = Math.min(320, Math.max(state.stream.charsPerSec, 120));
-          syncSelectedOutput({ animate: true });
-        }
-        if (!item.cancelRequested) {
-          setStatusByKey("status_success", "ok");
-          toastByKey("status_success", "success");
-        }
-        break;
-      }
-
-      if (item.status === "failed" || item.status === "cancelled") {
-        item.error = job.error || item.status;
-        renderQueueList();
-        if (state.selectedQueueLocalId === item.localId) {
-          syncSelectedOutput({ animate: false });
-        }
-        if (!item.cancelRequested) {
-          setStatusByKey("status_failed", "bad");
-          toastByKey("status_failed", "error");
-        }
-        break;
-      }
-
-      if (item.status === "pending") {
-        setStatusByKey("status_queued", "warn");
-      } else if (item.status === "running") {
-        setStatusByKey("status_running", "warn");
-      }
-
-      await sleep(1200);
-    }
+    await monitorQueueItem(item);
   } catch (err) {
     if (item.cancelRequested) {
       return;
@@ -1847,7 +2139,31 @@ function attachEvents() {
 
   els.modalTabSettings?.addEventListener("click", () => setSettingsMode("settings"));
   els.modalTabAbout?.addEventListener("click", () => setSettingsMode("about"));
-  els.btnSaveRuntimeSettings?.addEventListener("click", saveRuntimeSettingsFromInputs);
+  els.btnSaveRuntimeSettings?.addEventListener("click", () => {
+    saveAllSettingsFromInputs().catch((err) => {
+      showToast(`${t("error_prefix")}: ${err.message || err}`, "error", 5200);
+    });
+  });
+  els.providerSettingsList?.addEventListener("click", (event) => {
+    const target = event.target instanceof Element ? event.target : null;
+    if (!target) return;
+    const addBtn = target.closest(".provider-key-add");
+    if (addBtn) {
+      addProviderKeyRow(String(addBtn.getAttribute("data-provider") || ""));
+      return;
+    }
+    const removeBtn = target.closest(".provider-key-remove");
+    if (removeBtn) {
+      removeBtn.closest(".provider-key-row")?.remove();
+      return;
+    }
+    const testBtn = target.closest(".provider-key-test");
+    if (testBtn) {
+      testProviderKey(testBtn).catch((err) => {
+        showToast(`${t("error_prefix")}: ${err.message || err}`, "error", 4200);
+      });
+    }
+  });
 
   els.transcribeForm?.addEventListener("submit", transcribeHandler);
   els.btnCopyText?.addEventListener("click", copyTextHandler);
@@ -1860,6 +2176,15 @@ function attachEvents() {
       const localId = deleteBtn.getAttribute("data-local-id");
       if (!localId) return;
       removeQueueItem(localId);
+      return;
+    }
+    const retryBtn = target.closest(".queue-item-retry");
+    if (retryBtn) {
+      const localId = retryBtn.getAttribute("data-local-id");
+      if (!localId) return;
+      retryQueueItem(localId).catch((err) => {
+        showToast(`${t("error_prefix")}: ${err.message || err}`, "error", 4200);
+      });
       return;
     }
     const row = target.closest(".queue-item");

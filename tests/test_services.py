@@ -9,7 +9,7 @@ from fastapi import HTTPException
 import pytest
 
 from api.app.config import Settings
-from api.app.services import DownloadManager, LocalTranscriber, TranscriptionService, normalize_proxy_env
+from api.app.services import APITranscriber, DownloadManager, LocalTranscriber, TranscriptionService, normalize_proxy_env
 
 
 def _settings() -> Settings:
@@ -246,6 +246,7 @@ def test_local_transcriber_resolve_model_id_prefers_local_dir_for_large_v2() -> 
 def test_api_transcription_chunks_for_visible_progress() -> None:
     with tempfile.TemporaryDirectory() as tmp:
         settings = _settings()
+        settings.storage.runtime_dir = tmp
         settings.storage.output_dir = tmp
         svc = TranscriptionService(settings)
         prepared = Path(tmp) / "input.wav"
@@ -293,6 +294,25 @@ def test_api_transcription_chunks_for_visible_progress() -> None:
                         "segment_timestamps": True,
                     },
                     duration=300.0,
+                    checkpoint_id="job-checkpoint",
+                    progress_cb=lambda p: updates.append(p),
+                    partial_text_cb=lambda text: partials.append(text),
+                )
+            )
+            calls_after_first = len(calls)
+            resumed = _run(
+                svc._transcribe_api_with_optional_chunking(
+                    provider="groq",
+                    prepared_path=prepared,
+                    options={
+                        "model": "whisper-large-v3",
+                        "chunking_enabled": True,
+                        "chunk_minutes": 10,
+                        "chunk_overlap_minutes": 5,
+                        "segment_timestamps": True,
+                    },
+                    duration=300.0,
+                    checkpoint_id="job-checkpoint",
                     progress_cb=lambda p: updates.append(p),
                     partial_text_cb=lambda text: partials.append(text),
                 )
@@ -301,12 +321,52 @@ def test_api_transcription_chunks_for_visible_progress() -> None:
             _run(svc.close())
 
         assert len(calls) >= 2
+        assert len(calls) == calls_after_first
         assert updates
         assert updates[-1] >= 99.0
         assert partials
         assert "part" in out["text"]
+        assert resumed["text"] == out["text"]
         assert out["metadata"]["chunking"]["used"] is True
         assert out["metadata"]["chunking"]["progress_mode"] == "time-window-chunks"
+
+
+def test_api_transcriber_rotates_provider_keys_on_rate_limit() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        settings = _settings()
+        settings.providers.groq.enabled = True
+        settings.providers.groq.api_key = "key-1"
+        settings.providers.groq.api_keys = ["key-2"]
+        settings.providers.groq.base_url = "https://api.groq.com/openai"
+        settings.providers.groq.model = "whisper-large-v3"
+        audio = Path(tmp) / "a.wav"
+        audio.write_bytes(b"wav")
+        seen_headers = []
+
+        class _Resp:
+            def __init__(self, status_code: int, payload=None, text: str = "") -> None:
+                self.status_code = status_code
+                self._payload = payload or {}
+                self.text = text
+                self.headers = {"content-type": "application/json"}
+
+            def json(self):
+                return self._payload
+
+        class _Client:
+            async def post(self, *args, **kwargs):
+                auth = kwargs["headers"]["Authorization"]
+                seen_headers.append(auth)
+                if auth.endswith("key-1"):
+                    return _Resp(429, text='{"error":"rate limit"}')
+                return _Resp(200, {"text": "ok", "duration": 1.0, "language": "en"})
+
+        transcriber = APITranscriber(settings, _Client())  # type: ignore[arg-type]
+        out = _run(transcriber.transcribe("groq", audio, {"model": "whisper-large-v3"}))
+
+        assert out["text"] == "ok"
+        assert seen_headers == ["Bearer key-1", "Bearer key-2"]
+        assert out["metadata"]["provider_key_index"] == 2
 
 
 def test_local_transcriber_transcribe_uses_duration_hint_for_progress() -> None:

@@ -45,6 +45,38 @@ class ProviderRuntimeStatusResponse(BaseModel):
     providers: List[ProviderRuntimeStatus]
 
 
+class ProviderPanelConfig(BaseModel):
+    name: Literal["openai", "groq"]
+    enabled: bool = False
+    base_url: str = ""
+    model: str = ""
+    transcriptions_path: str = "/v1/audio/transcriptions"
+    timeout_sec: float = 300.0
+    api_keys: List[str] = Field(default_factory=list)
+
+
+class ProviderPanelSettingsResponse(BaseModel):
+    env_path: str
+    providers: List[ProviderPanelConfig]
+
+
+class ProviderPanelSettingsUpdateRequest(BaseModel):
+    providers: List[ProviderPanelConfig]
+
+
+class ProviderKeyTestRequest(BaseModel):
+    provider: Literal["openai", "groq"]
+    api_key: str
+    base_url: Optional[str] = None
+
+
+class ProviderKeyTestResponse(BaseModel):
+    provider: str
+    valid: bool
+    status_code: Optional[int] = None
+    reason: str = ""
+
+
 class TranscribeOptions(BaseModel):
     provider: Optional[Literal["local", "openai", "groq", "custom"]] = None
     model: Optional[str] = None

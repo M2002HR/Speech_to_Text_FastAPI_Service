@@ -83,6 +83,7 @@ providers:
     enabled: false
     base_url: https://api.openai.com
     api_key: ""
+    api_keys: []
     model: whisper-1
     transcriptions_path: /v1/audio/transcriptions
     timeout_sec: 300
@@ -90,6 +91,7 @@ providers:
     enabled: false
     base_url: https://api.groq.com/openai
     api_key: ""
+    api_keys: []
     model: whisper-large-v3
     transcriptions_path: /v1/audio/transcriptions
     timeout_sec: 300
@@ -97,6 +99,7 @@ providers:
     enabled: false
     base_url: ""
     api_key: ""
+    api_keys: []
     model: ""
     transcriptions_path: /v1/audio/transcriptions
     timeout_sec: 300

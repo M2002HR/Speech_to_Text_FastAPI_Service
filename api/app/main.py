@@ -1,6 +1,7 @@
 ﻿from __future__ import annotations
 
 import os
+import json
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from pathlib import Path
@@ -30,6 +31,11 @@ from .schemas import (
     RemoteModelRepoListResponse,
     ModelUrlResponse,
     ProviderInfo,
+    ProviderKeyTestRequest,
+    ProviderKeyTestResponse,
+    ProviderPanelConfig,
+    ProviderPanelSettingsResponse,
+    ProviderPanelSettingsUpdateRequest,
     ProvidersResponse,
     ProviderRuntimeStatusResponse,
     TranscriptionJobListResponse,
@@ -110,8 +116,11 @@ def _mask_secret(value: str) -> str:
 def _redacted_config(settings: Settings) -> Dict[str, Any]:
     data = settings.model_dump()
     data["providers"]["openai"]["api_key"] = _mask_secret(data["providers"]["openai"].get("api_key", ""))
+    data["providers"]["openai"]["api_keys"] = [_mask_secret(x) for x in data["providers"]["openai"].get("api_keys", [])]
     data["providers"]["groq"]["api_key"] = _mask_secret(data["providers"]["groq"].get("api_key", ""))
+    data["providers"]["groq"]["api_keys"] = [_mask_secret(x) for x in data["providers"]["groq"].get("api_keys", [])]
     data["providers"]["custom"]["api_key"] = _mask_secret(data["providers"]["custom"].get("api_key", ""))
+    data["providers"]["custom"]["api_keys"] = [_mask_secret(x) for x in data["providers"]["custom"].get("api_keys", [])]
     data["admin"]["token"] = _mask_secret(data["admin"].get("token", ""))
     return data
 
@@ -130,7 +139,8 @@ async def _check_openai_compatible_provider(
     provider: ProviderSection,
 ) -> Dict[str, Any]:
     configured = bool(provider.enabled)
-    key_present = bool(provider.api_key)
+    keys = provider.all_api_keys()
+    key_present = bool(keys)
     base_url = provider.base_url if configured else None
     model = provider.model or None
 
@@ -156,26 +166,30 @@ async def _check_openai_compatible_provider(
         out["reason"] = "provider api key is empty"
         return out
 
-    headers = {"Authorization": f"Bearer {provider.api_key}"}
     url = _models_url_for_provider(provider.base_url)
     client = request.app.state.services.transcription.client
-    try:
-        resp = await client.get(url, headers=headers, timeout=min(float(provider.timeout_sec or 30), 30.0))
-    except Exception as exc:
-        out["reason"] = f"validation request failed: {exc.__class__.__name__}"
-        return out
+    last_status: Optional[int] = None
+    for idx, key in enumerate(keys):
+        headers = {"Authorization": f"Bearer {key}"}
+        try:
+            resp = await client.get(url, headers=headers, timeout=min(float(provider.timeout_sec or 30), 30.0))
+        except Exception as exc:
+            out["reason"] = f"validation request failed: {exc.__class__.__name__}"
+            return out
 
-    out["status_code"] = resp.status_code
-    if 200 <= resp.status_code < 400:
-        out["valid"] = True
-        out["enabled_for_user"] = True
-        out["reason"] = "ok"
-        return out
+        last_status = resp.status_code
+        if 200 <= resp.status_code < 400:
+            out["valid"] = True
+            out["enabled_for_user"] = True
+            out["status_code"] = resp.status_code
+            out["reason"] = f"ok (key {idx + 1}/{len(keys)})"
+            return out
 
-    if resp.status_code in {401, 403}:
-        out["reason"] = "api key rejected by provider"
+    out["status_code"] = last_status
+    if last_status in {401, 403}:
+        out["reason"] = "all configured api keys were rejected by provider"
     else:
-        out["reason"] = f"provider returned HTTP {resp.status_code}"
+        out["reason"] = f"provider returned HTTP {last_status}"
     return out
 
 
@@ -309,6 +323,166 @@ async def provider_status(request: Request) -> Dict[str, Any]:
     return {
         "default_provider": settings.transcription.default_provider,
         "providers": items,
+    }
+
+
+def _env_file_path() -> Path:
+    return Path(os.getenv("ENV_FILE", ".env"))
+
+
+def _provider_panel_payload(settings: Settings) -> List[Dict[str, Any]]:
+    out: List[Dict[str, Any]] = []
+    for name, provider in [("openai", settings.providers.openai), ("groq", settings.providers.groq)]:
+        out.append(
+            {
+                "name": name,
+                "enabled": bool(provider.enabled),
+                "base_url": provider.base_url,
+                "model": provider.model,
+                "transcriptions_path": provider.transcriptions_path,
+                "timeout_sec": provider.timeout_sec,
+                "api_keys": provider.all_api_keys(),
+            }
+        )
+    return out
+
+
+def _read_env_lines(path: Path) -> List[str]:
+    if not path.exists():
+        return []
+    return path.read_text(encoding="utf-8").splitlines()
+
+
+def _quote_env_value(value: str) -> str:
+    text = str(value or "")
+    if not text:
+        return ""
+    if any(ch.isspace() for ch in text) or any(ch in text for ch in ['"', "'", "#"]):
+        return json.dumps(text, ensure_ascii=False)
+    return text
+
+
+def _write_env_values(path: Path, values: Dict[str, str]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    lines = _read_env_lines(path)
+    seen: set[str] = set()
+    out: List[str] = []
+
+    for line in lines:
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#") or "=" not in line:
+            out.append(line)
+            continue
+        key = line.split("=", 1)[0].strip()
+        if key in values:
+            out.append(f"{key}={_quote_env_value(values[key])}")
+            seen.add(key)
+        else:
+            out.append(line)
+
+    missing = [key for key in values if key not in seen]
+    if missing and out and out[-1].strip():
+        out.append("")
+    for key in missing:
+        out.append(f"{key}={_quote_env_value(values[key])}")
+
+    path.write_text("\n".join(out).rstrip() + "\n", encoding="utf-8")
+
+
+def _provider_env_values(payload: ProviderPanelSettingsUpdateRequest) -> Dict[str, str]:
+    values: Dict[str, str] = {}
+    seen: set[str] = set()
+
+    for item in payload.providers:
+        name = item.name.lower()
+        if name in seen:
+            raise HTTPException(status_code=422, detail=f"duplicate provider settings: {name}")
+        seen.add(name)
+
+        keys = [x.strip() for x in item.api_keys if str(x).strip()]
+        if item.enabled and not keys:
+            raise HTTPException(status_code=422, detail=f"{name} is enabled but no api key was provided")
+        if item.enabled and not item.base_url.strip():
+            raise HTTPException(status_code=422, detail=f"{name} is enabled but base_url is empty")
+        if item.enabled and not item.model.strip():
+            raise HTTPException(status_code=422, detail=f"{name} is enabled but model is empty")
+
+        prefix = f"PROVIDER_{name.upper()}"
+        values[f"{prefix}_ENABLED"] = "true" if item.enabled else "false"
+        values[f"{prefix}_BASE_URL"] = item.base_url.strip()
+        values[f"{prefix}_API_KEY"] = keys[0] if keys else ""
+        values[f"{prefix}_API_KEYS"] = ",".join(keys[1:]) if len(keys) > 1 else ""
+        values[f"{prefix}_MODEL"] = item.model.strip()
+        values[f"{prefix}_TRANSCRIPTIONS_PATH"] = item.transcriptions_path.strip() or "/v1/audio/transcriptions"
+        values[f"{prefix}_TIMEOUT_SEC"] = str(float(item.timeout_sec or 300.0))
+
+    return values
+
+
+@app.get(
+    "/providers/settings",
+    response_model=ProviderPanelSettingsResponse,
+    tags=["providers"],
+    summary="Get panel-editable provider settings",
+)
+async def provider_panel_settings(request: Request) -> Dict[str, Any]:
+    settings: Settings = request.app.state.settings
+    return {
+        "env_path": str(_env_file_path()),
+        "providers": _provider_panel_payload(settings),
+    }
+
+
+@app.put(
+    "/providers/settings",
+    response_model=ProviderPanelSettingsResponse,
+    tags=["providers"],
+    summary="Persist panel provider settings to .env and reload runtime",
+)
+async def provider_panel_settings_update(request: Request, payload: ProviderPanelSettingsUpdateRequest) -> Dict[str, Any]:
+    env_values = _provider_env_values(payload)
+    env_path = _env_file_path()
+    _write_env_values(env_path, env_values)
+
+    for key, value in env_values.items():
+        os.environ[key] = value
+
+    get_settings.cache_clear()
+    refreshed = load_settings()
+    await _apply_runtime_settings(request, refreshed)
+    return {
+        "env_path": str(env_path),
+        "providers": _provider_panel_payload(refreshed),
+    }
+
+
+@app.post(
+    "/providers/settings/test-key",
+    response_model=ProviderKeyTestResponse,
+    tags=["providers"],
+    summary="Validate one provider API key",
+)
+async def provider_panel_test_key(request: Request, payload: ProviderKeyTestRequest) -> Dict[str, Any]:
+    settings: Settings = request.app.state.settings
+    current = settings.providers.openai if payload.provider == "openai" else settings.providers.groq
+    provider = ProviderSection(
+        enabled=True,
+        base_url=(payload.base_url or current.base_url),
+        api_key=payload.api_key,
+        model=current.model,
+        transcriptions_path=current.transcriptions_path,
+        timeout_sec=current.timeout_sec,
+    )
+    result = await _check_openai_compatible_provider(
+        request,
+        provider_name=payload.provider,
+        provider=provider,
+    )
+    return {
+        "provider": payload.provider,
+        "valid": bool(result["valid"]),
+        "status_code": result["status_code"],
+        "reason": result["reason"],
     }
 
 
@@ -674,6 +848,17 @@ async def transcribe_job_get(request: Request, job_id: str) -> Dict[str, Any]:
 )
 async def transcribe_job_cancel(request: Request, job_id: str) -> Dict[str, Any]:
     job = request.app.state.services.transcription.cancel_transcription_job(job_id)
+    return job.to_dict()
+
+
+@app.post(
+    "/transcribe/jobs/{job_id}/retry",
+    response_model=TranscriptionJobResponse,
+    tags=["transcription"],
+    summary="Retry failed async transcription job",
+)
+async def transcribe_job_retry(request: Request, job_id: str) -> Dict[str, Any]:
+    job = request.app.state.services.transcription.retry_transcription_job(job_id)
     return job.to_dict()
 
 

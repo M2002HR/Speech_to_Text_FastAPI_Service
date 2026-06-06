@@ -101,9 +101,28 @@ class ProviderSection(BaseModel):
     enabled: bool = False
     base_url: str = ""
     api_key: str = ""
+    api_keys: List[str] = Field(default_factory=list)
     model: str = ""
     transcriptions_path: str = "/v1/audio/transcriptions"
     timeout_sec: float = 300.0
+
+    @field_validator("api_keys", mode="before")
+    @classmethod
+    def _normalize_api_keys(cls, value: Any) -> List[str]:
+        if value is None:
+            return []
+        if isinstance(value, str):
+            raw = value.replace(";", ",").replace("\n", ",")
+            return [x.strip() for x in raw.split(",") if x.strip()]
+        return [str(x).strip() for x in value if str(x).strip()]
+
+    def all_api_keys(self) -> List[str]:
+        keys: List[str] = []
+        for key in [self.api_key, *self.api_keys]:
+            clean = str(key or "").strip()
+            if clean and clean not in keys:
+                keys.append(clean)
+        return keys
 
 
 class CustomProviderSection(ProviderSection):
@@ -169,12 +188,12 @@ class Settings(BaseModel):
         if self.transcription.default_provider == "custom" and not self.providers.custom.enabled:
             raise ValueError("default provider is custom but providers.custom.enabled is false")
 
-        if self.providers.openai.enabled and (not self.providers.openai.base_url or not self.providers.openai.api_key):
-            raise ValueError("providers.openai requires base_url and api_key when enabled")
-        if self.providers.groq.enabled and (not self.providers.groq.base_url or not self.providers.groq.api_key):
-            raise ValueError("providers.groq requires base_url and api_key when enabled")
-        if self.providers.custom.enabled and (not self.providers.custom.base_url or not self.providers.custom.api_key):
-            raise ValueError("providers.custom requires base_url and api_key when enabled")
+        if self.providers.openai.enabled and not self.providers.openai.base_url:
+            raise ValueError("providers.openai requires base_url when enabled")
+        if self.providers.groq.enabled and not self.providers.groq.base_url:
+            raise ValueError("providers.groq requires base_url when enabled")
+        if self.providers.custom.enabled and not self.providers.custom.base_url:
+            raise ValueError("providers.custom requires base_url when enabled")
 
         if self.storage.max_upload_mb <= 0:
             raise ValueError("storage.max_upload_mb must be positive")
@@ -316,6 +335,7 @@ def _apply_env_overrides(config_dict: Dict[str, Any]) -> Dict[str, Any]:
         "PROVIDER_OPENAI_ENABLED": ("providers.openai.enabled", _parse_bool),
         "PROVIDER_OPENAI_BASE_URL": ("providers.openai.base_url", str),
         "PROVIDER_OPENAI_API_KEY": ("providers.openai.api_key", str),
+        "PROVIDER_OPENAI_API_KEYS": ("providers.openai.api_keys", _parse_csv),
         "PROVIDER_OPENAI_MODEL": ("providers.openai.model", str),
         "PROVIDER_OPENAI_TRANSCRIPTIONS_PATH": ("providers.openai.transcriptions_path", str),
         "PROVIDER_OPENAI_TIMEOUT_SEC": ("providers.openai.timeout_sec", float),
@@ -323,6 +343,7 @@ def _apply_env_overrides(config_dict: Dict[str, Any]) -> Dict[str, Any]:
         "PROVIDER_GROQ_ENABLED": ("providers.groq.enabled", _parse_bool),
         "PROVIDER_GROQ_BASE_URL": ("providers.groq.base_url", str),
         "PROVIDER_GROQ_API_KEY": ("providers.groq.api_key", str),
+        "PROVIDER_GROQ_API_KEYS": ("providers.groq.api_keys", _parse_csv),
         "PROVIDER_GROQ_MODEL": ("providers.groq.model", str),
         "PROVIDER_GROQ_TRANSCRIPTIONS_PATH": ("providers.groq.transcriptions_path", str),
         "PROVIDER_GROQ_TIMEOUT_SEC": ("providers.groq.timeout_sec", float),
@@ -330,6 +351,7 @@ def _apply_env_overrides(config_dict: Dict[str, Any]) -> Dict[str, Any]:
         "PROVIDER_CUSTOM_ENABLED": ("providers.custom.enabled", _parse_bool),
         "PROVIDER_CUSTOM_BASE_URL": ("providers.custom.base_url", str),
         "PROVIDER_CUSTOM_API_KEY": ("providers.custom.api_key", str),
+        "PROVIDER_CUSTOM_API_KEYS": ("providers.custom.api_keys", _parse_csv),
         "PROVIDER_CUSTOM_MODEL": ("providers.custom.model", str),
         "PROVIDER_CUSTOM_TRANSCRIPTIONS_PATH": ("providers.custom.transcriptions_path", str),
         "PROVIDER_CUSTOM_TIMEOUT_SEC": ("providers.custom.timeout_sec", float),

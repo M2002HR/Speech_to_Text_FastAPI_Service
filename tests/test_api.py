@@ -141,6 +141,65 @@ def test_provider_status_validates_api_keys(client_factory) -> None:
         assert providers["openai"]["status_code"] == 401
 
 
+def test_provider_panel_settings_persist_to_env_and_test_key(client_factory, tmp_path) -> None:
+    class _Resp:
+        def __init__(self, status_code: int) -> None:
+            self.status_code = status_code
+
+    async def _fake_get(url, **kwargs):
+        auth = kwargs.get("headers", {}).get("Authorization", "")
+        return _Resp(200 if auth.endswith("good-key") else 401)
+
+    env_path = tmp_path / ".env"
+    with client_factory({"ENV_FILE": str(env_path)}) as client:
+        client.app.state.services.transcription.client.get = _fake_get  # type: ignore[method-assign]
+
+        tested = client.post(
+            "/providers/settings/test-key",
+            json={
+                "provider": "groq",
+                "api_key": "good-key",
+                "base_url": "https://api.groq.com/openai",
+            },
+        )
+        assert tested.status_code == 200
+        assert tested.json()["valid"] is True
+
+        saved = client.put(
+            "/providers/settings",
+            json={
+                "providers": [
+                    {
+                        "name": "groq",
+                        "enabled": True,
+                        "base_url": "https://api.groq.com/openai",
+                        "model": "whisper-large-v3",
+                        "transcriptions_path": "/v1/audio/transcriptions",
+                        "timeout_sec": 300,
+                        "api_keys": ["good-key", "backup-key"],
+                    },
+                    {
+                        "name": "openai",
+                        "enabled": False,
+                        "base_url": "https://api.openai.com",
+                        "model": "whisper-1",
+                        "transcriptions_path": "/v1/audio/transcriptions",
+                        "timeout_sec": 300,
+                        "api_keys": [],
+                    },
+                ]
+            },
+        )
+        assert saved.status_code == 200
+        assert env_path.exists()
+        raw = env_path.read_text(encoding="utf-8")
+        assert "PROVIDER_GROQ_ENABLED=true" in raw
+        assert "PROVIDER_GROQ_API_KEY=good-key" in raw
+        assert "PROVIDER_GROQ_API_KEYS=backup-key" in raw
+        assert client.app.state.settings.providers.groq.enabled is True
+        assert client.app.state.settings.providers.groq.all_api_keys() == ["good-key", "backup-key"]
+
+
 def test_transcribe_endpoint_mocked(client_factory) -> None:
     with client_factory() as client:
         client.app.state.services.transcription.transcribe_upload = _fake_transcribe_upload

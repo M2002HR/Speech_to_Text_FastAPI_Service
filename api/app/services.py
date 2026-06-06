@@ -1114,6 +1114,36 @@ class APITranscriber:
     def __init__(self, settings: Settings, client: httpx.AsyncClient) -> None:
         self.settings = settings
         self.client = client
+        self._key_offsets: Dict[str, int] = {}
+
+    def _provider_keys(self, provider: ProviderSection) -> List[str]:
+        return provider.all_api_keys()
+
+    def _next_key_order(self, provider_name: str, provider: ProviderSection) -> List[Dict[str, Any]]:
+        keys = self._provider_keys(provider)
+        if not keys:
+            return []
+        offset = self._key_offsets.get(provider_name, 0) % len(keys)
+        ordered = keys[offset:] + keys[:offset]
+        return [
+            {
+                "key": key,
+                "index": keys.index(key),
+                "total": len(keys),
+            }
+            for key in ordered
+        ]
+
+    def _mark_key_success(self, provider_name: str, key_index: int, total: int) -> None:
+        if total > 0:
+            self._key_offsets[provider_name] = key_index % total
+
+    def _mark_key_limited(self, provider_name: str, key_index: int, total: int) -> None:
+        if total > 0:
+            self._key_offsets[provider_name] = (key_index + 1) % total
+
+    def _is_retryable_key_error(self, status_code: int) -> bool:
+        return status_code in {401, 403, 408, 409, 429, 500, 502, 503, 504}
 
     async def _call_openai_compatible(
         self,
@@ -1122,12 +1152,15 @@ class APITranscriber:
         provider: ProviderSection,
         audio_path: Path,
         options: Dict[str, Any],
+        api_key: str,
+        key_index: int,
+        key_total: int,
         custom_auth_header: Optional[str] = None,
         custom_auth_scheme: Optional[str] = None,
     ) -> Dict[str, Any]:
         if not provider.enabled:
             raise HTTPException(status_code=400, detail=f"provider '{provider_name}' is disabled")
-        if not provider.base_url or not provider.api_key:
+        if not provider.base_url or not api_key:
             raise HTTPException(status_code=500, detail=f"provider '{provider_name}' is missing base_url/api_key")
 
         url = join_url(provider.base_url, provider.transcriptions_path)
@@ -1149,9 +1182,9 @@ class APITranscriber:
         auth_header = custom_auth_header or "Authorization"
         auth_scheme = custom_auth_scheme or "Bearer"
         if auth_scheme:
-            auth_value = f"{auth_scheme} {provider.api_key}".strip()
+            auth_value = f"{auth_scheme} {api_key}".strip()
         else:
-            auth_value = provider.api_key
+            auth_value = api_key
 
         headers = {
             auth_header: auth_value,
@@ -1161,17 +1194,31 @@ class APITranscriber:
         started = time.perf_counter()
         with audio_path.open("rb") as f:
             files = {"file": (audio_path.name, f, content_type)}
-            resp = await self.client.post(
-                url,
-                data=data,
-                files=files,
-                headers=headers,
-                timeout=provider.timeout_sec,
-            )
+            try:
+                resp = await self.client.post(
+                    url,
+                    data=data,
+                    files=files,
+                    headers=headers,
+                    timeout=provider.timeout_sec,
+                )
+            except httpx.TimeoutException as exc:
+                raise HTTPException(
+                    status_code=504,
+                    detail=f"upstream {provider_name} timeout with key {key_index + 1}/{key_total}: {exc.__class__.__name__}",
+                ) from exc
+            except httpx.RequestError as exc:
+                raise HTTPException(
+                    status_code=503,
+                    detail=f"upstream {provider_name} request error with key {key_index + 1}/{key_total}: {exc.__class__.__name__}",
+                ) from exc
         process_ms = (time.perf_counter() - started) * 1000.0
 
         if resp.status_code >= 400:
-            raise HTTPException(status_code=resp.status_code, detail=f"upstream transcription error: {resp.text[:600]}")
+            raise HTTPException(
+                status_code=resp.status_code,
+                detail=f"upstream {provider_name} transcription error with key {key_index + 1}/{key_total}: {resp.text[:600]}",
+            )
 
         payload: Dict[str, Any]
         ctype = resp.headers.get("content-type", "").lower()
@@ -1199,26 +1246,70 @@ class APITranscriber:
             },
             "metadata": {
                 "upstream_raw": payload,
+                "provider_key_index": key_index + 1,
+                "provider_key_count": key_total,
             },
         }
 
+    async def _call_openai_compatible_with_key_rotation(
+        self,
+        *,
+        provider_name: str,
+        provider: ProviderSection,
+        audio_path: Path,
+        options: Dict[str, Any],
+        custom_auth_header: Optional[str] = None,
+        custom_auth_scheme: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        key_order = self._next_key_order(provider_name, provider)
+        if not key_order:
+            raise HTTPException(status_code=500, detail=f"provider '{provider_name}' is missing api_key")
+
+        errors: List[str] = []
+        last_exc: Optional[HTTPException] = None
+        for item in key_order:
+            try:
+                out = await self._call_openai_compatible(
+                    provider_name=provider_name,
+                    provider=provider,
+                    audio_path=audio_path,
+                    options=options,
+                    api_key=item["key"],
+                    key_index=int(item["index"]),
+                    key_total=int(item["total"]),
+                    custom_auth_header=custom_auth_header,
+                    custom_auth_scheme=custom_auth_scheme,
+                )
+                self._mark_key_success(provider_name, int(item["index"]), int(item["total"]))
+                return out
+            except HTTPException as exc:
+                last_exc = exc
+                errors.append(str(exc.detail))
+                self._mark_key_limited(provider_name, int(item["index"]), int(item["total"]))
+                if not self._is_retryable_key_error(int(exc.status_code)):
+                    break
+
+        detail = " | ".join(errors) if errors else "no provider key succeeded"
+        status_code = int(last_exc.status_code) if last_exc is not None else 500
+        raise HTTPException(status_code=status_code, detail=detail)
+
     async def transcribe(self, provider_name: str, audio_path: Path, options: Dict[str, Any]) -> Dict[str, Any]:
         if provider_name == "openai":
-            return await self._call_openai_compatible(
+            return await self._call_openai_compatible_with_key_rotation(
                 provider_name=provider_name,
                 provider=self.settings.providers.openai,
                 audio_path=audio_path,
                 options=options,
             )
         if provider_name == "groq":
-            return await self._call_openai_compatible(
+            return await self._call_openai_compatible_with_key_rotation(
                 provider_name=provider_name,
                 provider=self.settings.providers.groq,
                 audio_path=audio_path,
                 options=options,
             )
         if provider_name == "custom":
-            return await self._call_openai_compatible(
+            return await self._call_openai_compatible_with_key_rotation(
                 provider_name=provider_name,
                 provider=self.settings.providers.custom,
                 audio_path=audio_path,
@@ -1789,6 +1880,23 @@ class TranscriptionService:
         job.cancel_event.set()
         return job
 
+    def retry_transcription_job(self, job_id: str) -> TranscriptionJob:
+        job = self.get_transcription_job(job_id)
+        if job.status in {"pending", "running"}:
+            return job
+        if job.status != "failed":
+            raise HTTPException(status_code=409, detail="only failed jobs can be retried")
+        if not job.raw_path.exists():
+            raise HTTPException(status_code=410, detail="original upload is no longer available for retry")
+
+        job.status = "pending"
+        job.stage = "queued"
+        job.error = None
+        job.completed_at = None
+        job.cancel_event = asyncio.Event()
+        asyncio.create_task(self._run_transcription_job(job))
+        return job
+
     def _update_job_progress(self, job: TranscriptionJob, percent: float, stage: Optional[str] = None) -> None:
         job.progress_percent = max(job.progress_percent, min(100.0, float(percent)))
         if stage:
@@ -1808,6 +1916,35 @@ class TranscriptionService:
             "partial": True,
         }
         job.result = current
+
+    def _api_checkpoint_path(self, job_id: str) -> Path:
+        root = Path(self.settings.storage.runtime_dir) / "checkpoints"
+        root.mkdir(parents=True, exist_ok=True)
+        return root / f"{sanitize_name(job_id)}.json"
+
+    def _load_api_checkpoint(self, job_id: Optional[str]) -> Dict[str, Any]:
+        if not job_id:
+            return {}
+        path = self._api_checkpoint_path(job_id)
+        if not path.exists():
+            return {}
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+            return payload if isinstance(payload, dict) else {}
+        except Exception:
+            return {}
+
+    def _save_api_checkpoint(self, job_id: Optional[str], payload: Dict[str, Any]) -> None:
+        if not job_id:
+            return
+        path = self._api_checkpoint_path(job_id)
+        tmp = path.with_suffix(path.suffix + ".tmp")
+        tmp.write_text(json.dumps(payload, ensure_ascii=False, default=str), encoding="utf-8")
+        os.replace(tmp, path)
+
+    def _delete_api_checkpoint(self, job_id: str) -> None:
+        path = self._api_checkpoint_path(job_id)
+        path.unlink(missing_ok=True)
 
     def _resolve_chunking_runtime(self, options: Dict[str, Any], duration_seconds: Optional[float]) -> Dict[str, Any]:
         enabled_raw = options.get("chunking_enabled")
@@ -2195,6 +2332,7 @@ class TranscriptionService:
                     progress_cb(round(((idx + 1) / max(1, total_windows)) * 100.0, 2))
 
             _ensure_not_cancelled()
+            chunk_runs.sort(key=lambda x: int(x.get("index", 0)))
             merged = self._merge_chunk_outputs(
                 chunk_runs=chunk_runs,
                 segment_timestamps=(
@@ -2320,6 +2458,7 @@ class TranscriptionService:
         prepared_path: Path,
         options: Dict[str, Any],
         duration: Optional[float],
+        checkpoint_id: Optional[str] = None,
         progress_cb: Optional[Callable[[float], None]] = None,
         partial_text_cb: Optional[Callable[[str], None]] = None,
         cancel_event: Optional[asyncio.Event] = None,
@@ -2369,13 +2508,28 @@ class TranscriptionService:
             )
             return out
 
+        checkpoint = self._load_api_checkpoint(checkpoint_id)
+        checkpoint_runs = checkpoint.get("chunk_runs") if isinstance(checkpoint.get("chunk_runs"), list) else []
         chunk_runs: List[Dict[str, Any]] = []
+        for item in checkpoint_runs:
+            if not isinstance(item, dict):
+                continue
+            if "index" in item and isinstance(item.get("output"), dict):
+                chunk_runs.append(item)
+
+        completed_indexes = {int(x["index"]) for x in chunk_runs if isinstance(x.get("index"), int)}
         chunk_temp_paths: List[Path] = []
         total_windows = len(windows)
         streamed_text = ""
         try:
             for idx, w in enumerate(windows):
                 _ensure_not_cancelled()
+                window_index = int(w["index"])
+                if window_index in completed_indexes:
+                    if progress_cb:
+                        progress_cb(round((len(completed_indexes) / max(1, total_windows)) * 100.0, 2))
+                    continue
+
                 if progress_cb:
                     progress_cb(round((idx / max(1, total_windows)) * 100.0, 2))
 
@@ -2392,6 +2546,20 @@ class TranscriptionService:
                         "end": float(w["end"]),
                         "output": chunk_out,
                     }
+                )
+                completed_indexes.add(window_index)
+
+                self._save_api_checkpoint(
+                    checkpoint_id,
+                    {
+                        "job_id": checkpoint_id,
+                        "provider": provider,
+                        "model": str(api_options.get("model") or ""),
+                        "duration_seconds": duration,
+                        "window_count": total_windows,
+                        "chunk_runs": chunk_runs,
+                        "updated_at": now_utc().isoformat(),
+                    },
                 )
 
                 if partial_text_cb is not None:
@@ -2521,6 +2689,7 @@ class TranscriptionService:
                         prepared_path=prepared_path,
                         options=job.options,
                         duration=duration,
+                        checkpoint_id=job.job_id,
                         progress_cb=lambda p: self._update_job_progress(job, 15 + (float(p) * 0.8), "transcribing"),
                         partial_text_cb=lambda txt: self._update_job_partial_result(job, txt),
                         cancel_event=job.cancel_event,
@@ -2545,6 +2714,7 @@ class TranscriptionService:
                 job.status = "completed"
                 self._update_job_progress(job, 100, "completed")
                 job.completed_at = now_utc()
+                self._delete_api_checkpoint(job.job_id)
             except asyncio.CancelledError:
                 job.status = "cancelled"
                 job.error = None
@@ -2552,12 +2722,18 @@ class TranscriptionService:
                 job.completed_at = now_utc()
             except Exception as exc:
                 job.status = "failed"
-                job.error = str(exc)
+                if isinstance(exc, HTTPException):
+                    job.error = str(exc.detail)
+                else:
+                    job.error = str(exc)
                 job.completed_at = now_utc()
                 job.stage = "failed"
             finally:
                 if self.settings.storage.cleanup_temp_after_request:
-                    for p in {job.raw_path, prepared_path}:
+                    cleanup_paths = {prepared_path}
+                    if job.status != "failed":
+                        cleanup_paths.add(job.raw_path)
+                    for p in cleanup_paths:
                         if p and p.exists():
                             try:
                                 p.unlink(missing_ok=True)
