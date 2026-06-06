@@ -10,3 +10,5 @@ def test_live_panel_has_clear_microphone_errors_and_gpt_oss_default():
     assert "openai/gpt-oss-120b" in text
     assert "m.type==='fatal'" in text
     assert "خطای provider" in text
+    assert "startStandaloneChunk" in text
+    assert "فایل مستقل" in text
