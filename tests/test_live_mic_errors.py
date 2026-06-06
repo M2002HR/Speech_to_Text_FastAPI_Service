@@ -8,3 +8,5 @@ def test_live_panel_has_clear_microphone_errors_and_gpt_oss_default():
     assert "میکروفون پیدا نشد" in text
     assert "NotAllowedError" in text
     assert "openai/gpt-oss-120b" in text
+    assert "m.type==='fatal'" in text
+    assert "خطای provider" in text
