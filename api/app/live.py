@@ -9,12 +9,12 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 import httpx
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse
 
 _UI_DIR = Path(__file__).resolve().parent / "ui"
 _DEFAULT_GROQ_STT_MODEL = "whisper-large-v3-turbo"
-_DEFAULT_GROQ_LLM_MODEL = "llama-3.1-8b-instant"
+_DEFAULT_GROQ_LLM_MODEL = "openai/gpt-oss-120b"
 _MAX_LIVE_QUEUE_SIZE = 6
 
 
@@ -88,11 +88,11 @@ class LiveSession:
             await self._finish_worker()
 
     def _normalize_config(self, payload: Dict[str, Any]) -> Dict[str, Any]:
-        provider = str(payload.get("provider") or "groq").strip().lower()
+        provider = str(payload.get("provider") or os.getenv("LIVE_STT_PROVIDER") or "groq").strip().lower()
         if provider not in {"local", "openai", "groq", "custom"}:
             provider = "groq"
 
-        stt_model = str(payload.get("stt_model") or payload.get("model") or "").strip()
+        stt_model = str(payload.get("stt_model") or payload.get("model") or os.getenv("LIVE_STT_MODEL") or "").strip()
         if provider == "groq" and not stt_model:
             stt_model = _DEFAULT_GROQ_STT_MODEL
         elif provider == "local" and not stt_model:
@@ -101,11 +101,13 @@ class LiveSession:
             provider_section = getattr(self.settings.providers, provider, None)
             stt_model = getattr(provider_section, "model", "") or "default"
 
-        llm_provider = str(payload.get("llm_provider") or provider or "groq").strip().lower()
+        llm_provider = str(payload.get("llm_provider") or os.getenv("LIVE_LLM_PROVIDER") or provider or "groq").strip().lower()
         if llm_provider not in {"openai", "groq", "custom"}:
             llm_provider = "groq"
         llm_model = str(payload.get("llm_model") or os.getenv("LIVE_LLM_MODEL") or "").strip()
         if llm_provider == "groq" and not llm_model:
+            llm_model = _DEFAULT_GROQ_LLM_MODEL
+        if llm_provider == "groq" and llm_model == "llama-3.1-8b-instant":
             llm_model = _DEFAULT_GROQ_LLM_MODEL
 
         mime_type = str(payload.get("mime_type") or "audio/webm").split(";", 1)[0].strip().lower()
@@ -115,10 +117,10 @@ class LiveSession:
         return {
             "provider": provider,
             "stt_model": stt_model,
-            "language": str(payload.get("language") or "fa").strip().lower() or "fa",
+            "language": str(payload.get("language") or os.getenv("LIVE_LANGUAGE") or "fa").strip().lower() or "fa",
             "prompt": str(payload.get("prompt") or "کلاس دانشگاهی به زبان فارسی. اصطلاحات تخصصی را با املای درست حفظ کن.").strip(),
             "mime_type": mime_type,
-            "llm_enabled": bool(payload.get("llm_enabled", True)),
+            "llm_enabled": bool(payload.get("llm_enabled", os.getenv("LIVE_LLM_ENABLED", "true").lower() not in {"0", "false", "no", "off"})),
             "llm_provider": llm_provider,
             "llm_model": llm_model,
             "llm_max_tokens": int(payload.get("llm_max_tokens") or 384),
@@ -145,6 +147,8 @@ class LiveSession:
             await self._send({"type": "config", "config": self._public_config()})
 
     async def _enqueue_audio_chunk(self, chunk: bytes) -> None:
+        if self.stop_event.is_set():
+            return
         self.chunk_counter += 1
         chunk_index = self.chunk_counter
         if self.queue.full():
@@ -157,6 +161,16 @@ class LiveSession:
             return
         await self.queue.put((chunk_index, chunk))
         await self._send({"type": "queued", "chunk_index": chunk_index, "queue_size": self.queue.qsize()})
+
+    def _clear_pending_audio(self) -> int:
+        cleared = 0
+        while True:
+            try:
+                self.queue.get_nowait()
+                self.queue.task_done()
+                cleared += 1
+            except asyncio.QueueEmpty:
+                return cleared
 
     async def _finish_worker(self) -> None:
         if self.worker_task is None:
@@ -181,10 +195,29 @@ class LiveSession:
         while not self.stop_event.is_set():
             item = await self.queue.get()
             if item is None:
+                self.queue.task_done()
                 break
             chunk_index, chunk = item
             try:
                 await self._process_chunk(chunk_index, chunk)
+            except HTTPException as exc:
+                if int(exc.status_code) in {401, 403}:
+                    cleared = self._clear_pending_audio()
+                    self.stop_event.set()
+                    await self._send({
+                        "type": "fatal",
+                        "chunk_index": chunk_index,
+                        "status_code": int(exc.status_code),
+                        "message": _describe_upstream_http_error(exc, self.config),
+                        "detail": str(exc.detail),
+                        "cleared_queue_items": cleared,
+                    })
+                    break
+                await self._send({
+                    "type": "error",
+                    "chunk_index": chunk_index,
+                    "message": f"HTTPException: {exc.status_code}: {exc.detail}",
+                })
             except Exception as exc:
                 await self._send({
                     "type": "error",
@@ -192,7 +225,10 @@ class LiveSession:
                     "message": f"{exc.__class__.__name__}: {exc}",
                 })
             finally:
-                self.queue.task_done()
+                try:
+                    self.queue.task_done()
+                except ValueError:
+                    pass
 
     async def _process_chunk(self, chunk_index: int, chunk: bytes) -> None:
         suffix = _suffix_for_mime(self.config["mime_type"])
@@ -352,6 +388,25 @@ def _llm_fail_open(raw_text: str, provider: str, model: str, reason: str) -> Dic
         "uncertain_spans": [],
         "llm": {"enabled": False, "provider": provider, "model": model, "reason": reason},
     }
+
+
+def _describe_upstream_http_error(exc: HTTPException, config: Dict[str, Any]) -> str:
+    provider = str(config.get("provider") or "provider")
+    model = str(config.get("stt_model") or "model")
+    detail = str(exc.detail)
+    if int(exc.status_code) == 403 and provider == "groq":
+        return (
+            f"Groq درخواست transcription را Forbidden کرد. معمولاً یعنی API key یا Project/Organization به مدل STT '{model}' دسترسی ندارد. "
+            "در Groq Console بخش Settings → Project/Organization → Limits را چک کن و مدل‌های whisper-large-v3-turbo یا whisper-large-v3 را allow کن، "
+            "یا یک API key جدید از همان project بساز. تا رفع این خطا live متوقف شد تا queue پر نشود. "
+            f"جزئیات upstream: {detail[:240]}"
+        )
+    if int(exc.status_code) == 401:
+        return (
+            f"کلید {provider} نامعتبر است یا در .env درست load نشده. مقدار API key را بدون فاصله/quote اضافه چک کن. "
+            f"جزئیات upstream: {detail[:240]}"
+        )
+    return f"upstream {provider} transcription failed with HTTP {exc.status_code}: {detail[:240]}"
 
 
 def _parse_json_object(text: str) -> Optional[Dict[str, Any]]:
