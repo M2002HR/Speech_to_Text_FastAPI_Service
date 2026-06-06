@@ -14,6 +14,7 @@ from fastapi.responses import FileResponse
 
 _UI_DIR = Path(__file__).resolve().parent / "ui"
 _DEFAULT_GROQ_STT_MODEL = "whisper-large-v3"
+_FALLBACK_GROQ_STT_MODEL = "whisper-large-v3-turbo"
 _DEFAULT_GROQ_LLM_MODEL = "openai/gpt-oss-120b"
 _MAX_LIVE_QUEUE_SIZE = 6
 _DEFAULT_LLM_CONTEXT_TOKENS = 300
@@ -96,7 +97,7 @@ class LiveSession:
             provider = "groq"
 
         stt_model = str(payload.get("stt_model") or payload.get("model") or os.getenv("LIVE_STT_MODEL") or "").strip()
-        if provider == "groq" and (not stt_model or stt_model == "whisper-large-v3-turbo"):
+        if provider == "groq" and (not stt_model or stt_model == _FALLBACK_GROQ_STT_MODEL):
             stt_model = _DEFAULT_GROQ_STT_MODEL
         elif provider == "local" and not stt_model:
             stt_model = self.settings.local.model_id
@@ -313,7 +314,30 @@ class LiveSession:
         }
         if provider == "local":
             return await self.transcription.local.transcribe(audio_path, options)
-        return await self.transcription.api.transcribe(provider, audio_path, options)
+        try:
+            return await self.transcription.api.transcribe(provider, audio_path, options)
+        except HTTPException as exc:
+            if provider == "groq" and int(exc.status_code) == 403 and options.get("model") == _DEFAULT_GROQ_STT_MODEL:
+                fallback_options = {**options, "model": _FALLBACK_GROQ_STT_MODEL}
+                await self._send({
+                    "type": "warning",
+                    "message": (
+                        "Groq به مدل دقیق‌تر whisper-large-v3 دسترسی نداد؛ "
+                        "برای ادامه live به whisper-large-v3-turbo fallback شد. "
+                        "برای دقت بالاتر، مدل whisper-large-v3 را در Groq Project/Organization allow کن."
+                    ),
+                })
+                result = await self.transcription.api.transcribe(provider, audio_path, fallback_options)
+                self.config["stt_model"] = _FALLBACK_GROQ_STT_MODEL
+                result.setdefault("metadata", {})
+                if isinstance(result.get("metadata"), dict):
+                    result["metadata"]["live_model_fallback"] = {
+                        "from": _DEFAULT_GROQ_STT_MODEL,
+                        "to": _FALLBACK_GROQ_STT_MODEL,
+                        "reason": "403_forbidden",
+                    }
+                return result
+            raise
 
     async def _clean_with_llm(self, raw_text: str, quality_flags: List[Dict[str, Any]]) -> Dict[str, Any]:
         if not raw_text:
