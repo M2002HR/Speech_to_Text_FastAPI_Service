@@ -12,6 +12,10 @@ def test_live_panel_has_clear_microphone_errors_and_gpt_oss_default():
     assert "خطای provider" in text
     assert "startStandaloneChunk" in text
     assert "فایل مستقل" in text
+    assert "audioTopic" in text
+    assert "موضوع صدا" in text
+    assert "whisper-large-v3" in text
+    assert "6000" in text
 
 
 def test_live_backend_has_rolling_context_for_stt_and_llm():
@@ -19,6 +23,9 @@ def test_live_backend_has_rolling_context_for_stt_and_llm():
     text = live_py.read_text(encoding="utf-8")
     assert "LIVE_LLM_CONTEXT_TOKENS" in text
     assert "LIVE_STT_CONTEXT_TOKENS" in text
+    assert "LIVE_AUDIO_TOPIC" in text
+    assert "audio_topic" in text
     assert "_build_stt_prompt" in text
     assert "previous_context_token_budget" in text
     assert "if provider != \"local\"" in text
+    assert "_DEFAULT_GROQ_STT_MODEL = \"whisper-large-v3\"" in text
