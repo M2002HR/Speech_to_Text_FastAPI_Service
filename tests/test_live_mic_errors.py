@@ -29,3 +29,6 @@ def test_live_backend_has_rolling_context_for_stt_and_llm():
     assert "previous_context_token_budget" in text
     assert "if provider != \"local\"" in text
     assert "_DEFAULT_GROQ_STT_MODEL = \"whisper-large-v3\"" in text
+    assert "_FALLBACK_GROQ_STT_MODEL = \"whisper-large-v3-turbo\"" in text
+    assert "live_model_fallback" in text
+    assert "403_forbidden" in text
