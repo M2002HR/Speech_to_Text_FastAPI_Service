@@ -9,6 +9,25 @@ SKIP_TESTS=0
 SKIP_SMOKE_TESTS=0
 PYTHON_BIN="${PYTHON_BIN:-python3}"
 LOCAL_MODEL_ID="${LOCAL_MODEL_ID:-tiny}"
+NO_PAUSE="${TOOTAK_NO_PAUSE:-0}"
+
+pause_before_exit(){
+  local code="$1"
+  local reason="${2:-Script stopped}"
+  if [[ "$NO_PAUSE" == "1" || ! -t 0 ]]; then return; fi
+  if [[ "$code" != "0" ]]; then
+    echo
+    echo "${reason}. Press Enter to close this window..."
+    read -r _ || true
+  fi
+}
+
+on_error(){
+  local code="$?"
+  pause_before_exit "$code" "Script failed"
+  exit "$code"
+}
+trap on_error ERR
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -20,6 +39,7 @@ while [[ $# -gt 0 ]]; do
     --skip-package-install) SKIP_PACKAGE_INSTALL=1; shift ;;
     --skip-tests) SKIP_TESTS=1; shift ;;
     --skip-smoke-tests) SKIP_SMOKE_TESTS=1; shift ;;
+    --no-pause) NO_PAUSE=1; shift ;;
     *) echo "Unknown argument: $1" >&2; exit 2 ;;
   esac
 done
@@ -98,6 +118,7 @@ if [[ "$SKIP_SMOKE_TESTS" -eq 0 ]]; then
   curl -fsS "http://127.0.0.1:${TMP_PORT}/live" >/dev/null
   cleanup
   trap - EXIT
+  trap on_error ERR
 else
   warn "Skipping smoke tests"
 fi
@@ -113,4 +134,7 @@ if [[ "$HOST_NAME" == "0.0.0.0" ]]; then
   [[ -n "${LAN_IP:-}" ]] && log "LAN URL: http://${LAN_IP}:${PORT}/live"
 fi
 log "Local URL: http://127.0.0.1:${PORT}/live"
-exec python -m uvicorn api.app.main:app --host "$HOST_NAME" --port "$PORT" --reload
+python -m uvicorn api.app.main:app --host "$HOST_NAME" --port "$PORT" --reload
+status=$?
+if [[ "$status" != "0" ]]; then pause_before_exit "$status" "Server stopped or failed"; fi
+exit "$status"
