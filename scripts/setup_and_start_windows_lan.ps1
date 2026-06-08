@@ -18,15 +18,23 @@ $exitCode = 0
 try {
   $scriptDir = if ($PSScriptRoot) { $PSScriptRoot } else { Split-Path -Parent $MyInvocation.MyCommand.Path }
   $setupScript = Join-Path $scriptDir "setup_and_start_windows.ps1"
+  $startScript = Join-Path $scriptDir "start_windows.ps1"
   if (-not (Test-Path $setupScript)) {
     throw "setup_and_start_windows.ps1 was not found next to this script."
   }
+  if (-not (Test-Path $startScript)) {
+    throw "start_windows.ps1 was not found next to this script."
+  }
 
-  Write-Host "Starting full Windows setup with LAN bind host 0.0.0.0..." -ForegroundColor Cyan
-  & $setupScript -HostName "0.0.0.0" @Args
+  Write-Host "Running full Windows setup checks with LAN bind host 0.0.0.0..." -ForegroundColor Cyan
+  & $setupScript -HostName "0.0.0.0" -NoStart @Args
   $exitCode = if ($LASTEXITCODE -ne $null) { [int]$LASTEXITCODE } else { 0 }
   if ($exitCode -ne 0) {
     Write-Host "setup_and_start_windows.ps1 exited with code $exitCode" -ForegroundColor Red
+  } else {
+    Write-Host "Starting live-enabled app entrypoint..." -ForegroundColor Cyan
+    & $startScript -HostName "0.0.0.0"
+    $exitCode = if ($LASTEXITCODE -ne $null) { [int]$LASTEXITCODE } else { 0 }
   }
 } catch {
   $exitCode = 1
