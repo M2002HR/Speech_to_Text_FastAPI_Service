@@ -105,9 +105,10 @@ try {
     Write-Log "INFO" "LAN:   http://$ip`:$finalPort" Cyan
   }
   Write-Log "INFO" "Live:  http://127.0.0.1`:$finalPort/live" Cyan
+  Write-Log "INFO" "Entrypoint: api.app.main_live:app" Gray
   Write-Log "INFO" "Press Ctrl+C to stop." Gray
 
-  & $Python -m uvicorn api.app.main:app --host $HostName --port $finalPort --reload
+  & $Python -m uvicorn api.app.main_live:app --host $HostName --port $finalPort --reload
   $exitCode = if ($LASTEXITCODE -ne $null) { [int]$LASTEXITCODE } else { 0 }
   if ($exitCode -ne 0) {
     Write-Log "FAILED" "uvicorn exited with code $exitCode" Red
