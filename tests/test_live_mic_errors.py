@@ -11,11 +11,14 @@ def test_live_panel_has_clear_microphone_errors_and_gpt_oss_default():
     assert "m.type==='fatal'" in text
     assert "خطای provider" in text
     assert "startStandaloneChunk" in text
-    assert "فایل مستقل" in text
+    assert "chunk مستقل" in text
     assert "audioTopic" in text
     assert "موضوع صدا" in text
     assert "whisper-large-v3" in text
     assert "6000" in text
+    assert "setupVad" in text
+    assert "shouldSendCurrentChunk" in text
+    assert "skippedCount" in text
 
 
 def test_live_backend_has_rolling_context_for_stt_and_llm():
