@@ -8,7 +8,7 @@ def test_live_stt_prompt_is_below_groq_character_limit():
         previous_context="context " * 250,
         context_tokens=160,
     )
-    assert len(prompt) <= 840
+    assert len(prompt) <= 620
     assert prompt.strip()
 
 
