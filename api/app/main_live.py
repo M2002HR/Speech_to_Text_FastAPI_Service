@@ -42,9 +42,42 @@ class LiveEnabledASGI:
         await session.run()
 
 
+def _disable_groq_stt_prompt() -> None:
+    """Groq STT has a very small prompt character limit; live Groq STT sends no prompt."""
+    session_cls = live.LiveSession
+    if getattr(session_cls, "_tootak_groq_stt_no_prompt", False):
+        return
+
+    original = session_cls._transcribe_chunk
+
+    async def patched_transcribe_chunk(self: Any, audio_path: Any) -> dict[str, Any]:
+        if str(self.config.get("provider") or "").lower() != "groq":
+            return await original(self, audio_path)
+
+        old_prompt = self.config.get("prompt")
+        old_topic = self.config.get("audio_topic")
+        old_stt_context = self.config.get("stt_context_tokens")
+        old_previous_context = self.previous_context
+        try:
+            self.config["prompt"] = ""
+            self.config["audio_topic"] = ""
+            self.config["stt_context_tokens"] = 0
+            self.previous_context = ""
+            return await original(self, audio_path)
+        finally:
+            self.config["prompt"] = old_prompt
+            self.config["audio_topic"] = old_topic
+            self.config["stt_context_tokens"] = old_stt_context
+            self.previous_context = old_previous_context
+
+    session_cls._transcribe_chunk = patched_transcribe_chunk
+    setattr(session_cls, "_tootak_groq_stt_no_prompt", True)
+
+
 def _prepare_live() -> None:
     apply_live_prompt_guard(live)
     apply_live_runtime_fixes(live)
+    _disable_groq_stt_prompt()
 
 
 _prepare_live()
