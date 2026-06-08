@@ -1,7 +1,8 @@
 param(
   [string]$HostName = "0.0.0.0",
   [int]$Port = 0,
-  [string]$Python = ""
+  [string]$Python = "",
+  [switch]$NoPause
 )
 
 Set-StrictMode -Version Latest
@@ -11,6 +12,14 @@ function Write-Log {
   param([string]$Tag, [string]$Message, [ConsoleColor]$Color = [ConsoleColor]::Gray)
   $stamp = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
   Write-Host "[$stamp][$Tag] $Message" -ForegroundColor $Color
+}
+
+function Pause-BeforeExit {
+  param([string]$Reason = "Script stopped")
+  if ($NoPause -or $env:TOOTAK_NO_PAUSE -eq "1") { return }
+  Write-Host ""
+  Write-Host "$Reason. Press Enter to close this window..." -ForegroundColor Yellow
+  try { [void](Read-Host) } catch { }
 }
 
 function Fail {
@@ -57,6 +66,7 @@ function Get-LocalIPv4Addresses {
   }
 }
 
+$exitCode = 0
 try {
   $scriptDir = if ($PSScriptRoot) { $PSScriptRoot } else { Split-Path -Parent $MyInvocation.MyCommand.Path }
   $repoRoot = (Resolve-Path (Join-Path $scriptDir "..")).Path
@@ -98,10 +108,20 @@ try {
   Write-Log "INFO" "Press Ctrl+C to stop." Gray
 
   & $Python -m uvicorn api.app.main:app --host $HostName --port $finalPort --reload
-  if ($LASTEXITCODE -ne 0) {
-    Fail "uvicorn exited with code $LASTEXITCODE"
+  $exitCode = if ($LASTEXITCODE -ne $null) { [int]$LASTEXITCODE } else { 0 }
+  if ($exitCode -ne 0) {
+    Write-Log "FAILED" "uvicorn exited with code $exitCode" Red
+  } else {
+    Write-Log "STOPPED" "uvicorn stopped." Yellow
   }
 } catch {
+  $exitCode = 1
   Write-Log "FAILED" $_.Exception.Message Red
-  exit 1
+} finally {
+  if ($exitCode -ne 0) {
+    Pause-BeforeExit -Reason "Script failed"
+  } else {
+    Pause-BeforeExit -Reason "Server stopped"
+  }
 }
+exit $exitCode
