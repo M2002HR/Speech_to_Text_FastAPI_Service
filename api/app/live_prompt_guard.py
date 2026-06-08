@@ -8,10 +8,12 @@ _MAX_STT_PROMPT_CHARS = 840
 
 
 def apply_live_prompt_guard(live_module: Any) -> None:
-    """Small runtime fixes for /live: STT prompt length, local auto language, and list cleanup."""
+    """Small runtime fixes for /live: STT prompt length, local auto language, UI controls, and list cleanup."""
     if not getattr(live_module, "_tootak_stt_prompt_char_guard", False):
         live_module._build_stt_prompt = _build_limited_stt_prompt
         setattr(live_module, "_tootak_stt_prompt_char_guard", True)
+
+    _patch_live_ui(live_module)
 
     session_cls = live_module.LiveSession
     if not getattr(session_cls, "_tootak_llm_list_cleanup_patch", False):
@@ -28,6 +30,79 @@ def apply_live_prompt_guard(live_module: Any) -> None:
         setattr(session_cls, "_tootak_llm_list_cleanup_patch", True)
 
     _patch_local_auto_language()
+
+
+def _patch_live_ui(live_module: Any) -> None:
+    if getattr(live_module, "_tootak_live_ui_guard", False):
+        return
+
+    async def install_guarded_live_routes(app: Any) -> None:
+        return None
+
+    def install_live_routes(app: Any) -> None:
+        if getattr(app.state, "live_routes_installed", False):
+            return
+        app.state.live_routes_installed = True
+
+        from fastapi.responses import HTMLResponse
+
+        @app.get("/live", include_in_schema=False, summary="Live transcription Web UI")
+        async def ui_live_index() -> HTMLResponse:
+            html = (live_module._UI_DIR / "live.html").read_text(encoding="utf-8")
+            return HTMLResponse(_enhance_live_html(html))
+
+        @app.websocket("/live/ws")
+        async def live_transcription_ws(websocket: Any) -> None:
+            await websocket.accept()
+            session = live_module.LiveSession(websocket)
+            await session.run()
+
+    live_module.install_live_routes = install_live_routes
+    setattr(live_module, "_tootak_live_ui_guard", True)
+
+
+def _enhance_live_html(html: str) -> str:
+    language_input = '<label>زبان<input id="language" value="fa" dir="ltr"></label>'
+    language_select = (
+        '<label>زبان<select id="language">'
+        '<option value="auto">Auto / تشخیص خودکار</option>'
+        '<option value="fa" selected>فارسی fa</option>'
+        '<option value="en">English en</option>'
+        '<option value="ar">Arabic ar</option>'
+        '<option value="tr">Turkish tr</option>'
+        '<option value="de">German de</option>'
+        '<option value="fr">French fr</option>'
+        '</select></label>'
+    )
+    html = html.replace(language_input, language_select)
+    html = html.replace("language:$('language').value.trim()||'fa'", "language:$('language').value")
+    html = html.replace(
+        "<option value=\"local\">Local faster-whisper</option>",
+        "<option value=\"local\">Local faster-whisper اگر مدل موجود باشد</option>",
+    )
+    html = html.replace(
+        "Provider STT<select id=\"provider\"><option value=\"groq\" selected>Groq - دقیق‌تر</option><option value=\"openai\">OpenAI-compatible</option><option value=\"local\">Local faster-whisper اگر مدل موجود باشد</option><option value=\"custom\">Custom</option></select>",
+        "Provider STT<select id=\"provider\"><option value=\"groq\" selected>Groq - دقیق‌تر</option><option value=\"local\">Local faster-whisper اگر مدل موجود باشد</option><option value=\"openai\">OpenAI-compatible</option><option value=\"custom\">Custom</option></select>",
+    )
+    html = html.replace(
+        "$('provider').addEventListener('change',()=>{if($('provider').value==='groq')$('sttModel').value='whisper-large-v3'});",
+        "$('provider').addEventListener('change',()=>{if($('provider').value==='groq'){$('sttModel').value='whisper-large-v3'}else if($('provider').value==='local'){$('sttModel').value='large-v3';addEvent('Provider لوکال انتخاب شد؛ اگر large-v3 دانلود نشده، از مدل موجود مثل medium یا small استفاده کن.','warning')}});",
+    )
+    marker = "function handleServerMessage(m){"
+    helper = (
+        "function formatItem(x){if(x===null||x===undefined)return '';"
+        "if(typeof x==='string'||typeof x==='number'||typeof x==='boolean')return String(x).trim();"
+        "if(Array.isArray(x))return x.map(formatItem).filter(Boolean).join('، ');"
+        "if(typeof x==='object'){for(const k of ['text','word','phrase','span','value','reason','note']){if(x[k])return formatItem(x[k])}try{return JSON.stringify(x)}catch(_){return String(x)}}return String(x).trim()}"
+        "function formatList(v){if(!Array.isArray(v))v=v?[v]:[];const out=[];for(const item of v){const text=formatItem(item);if(text&&!out.includes(text))out.push(text)}return out}"
+    )
+    if "function formatItem" not in html and marker in html:
+        html = html.replace(marker, helper + marker)
+    html = html.replace(
+        "const miss=Array.isArray(m.possible_missing_words)?m.possible_missing_words.filter(Boolean):[];const unc=Array.isArray(m.uncertain_spans)?m.uncertain_spans.filter(Boolean):[];",
+        "const miss=formatList(m.possible_missing_words);const unc=formatList(m.uncertain_spans);",
+    )
+    return html
 
 
 def _build_limited_stt_prompt(base_prompt: str, audio_topic: str, previous_context: str, context_tokens: int) -> str:
