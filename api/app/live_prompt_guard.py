@@ -4,7 +4,7 @@ import json
 from pathlib import Path
 from typing import Any, Dict, List
 
-_MAX_STT_PROMPT_CHARS = 840
+_MAX_STT_PROMPT_CHARS = 620
 
 
 def apply_live_prompt_guard(live_module: Any) -> None:
@@ -13,6 +13,7 @@ def apply_live_prompt_guard(live_module: Any) -> None:
         live_module._build_stt_prompt = _build_limited_stt_prompt
         setattr(live_module, "_tootak_stt_prompt_char_guard", True)
 
+    _patch_api_prompt_limit()
     _patch_live_ui(live_module)
 
     session_cls = live_module.LiveSession
@@ -32,12 +33,31 @@ def apply_live_prompt_guard(live_module: Any) -> None:
     _patch_local_auto_language()
 
 
+def _patch_api_prompt_limit() -> None:
+    try:
+        from .services import APITranscriber
+    except Exception:
+        return
+    if getattr(APITranscriber, "_tootak_api_prompt_limit_patch", False):
+        return
+
+    original = APITranscriber._call_openai_compatible
+
+    async def patched(self: Any, *args: Any, **kwargs: Any) -> Dict[str, Any]:
+        options = kwargs.get("options")
+        if isinstance(options, dict) and options.get("prompt"):
+            safe_options = dict(options)
+            safe_options["prompt"] = _clip(str(options.get("prompt") or ""), _MAX_STT_PROMPT_CHARS)
+            kwargs["options"] = safe_options
+        return await original(self, *args, **kwargs)
+
+    APITranscriber._call_openai_compatible = patched
+    setattr(APITranscriber, "_tootak_api_prompt_limit_patch", True)
+
+
 def _patch_live_ui(live_module: Any) -> None:
     if getattr(live_module, "_tootak_live_ui_guard", False):
         return
-
-    async def install_guarded_live_routes(app: Any) -> None:
-        return None
 
     def install_live_routes(app: Any) -> None:
         if getattr(app.state, "live_routes_installed", False):
@@ -111,13 +131,13 @@ def _build_limited_stt_prompt(base_prompt: str, audio_topic: str, previous_conte
     context = _collapse(previous_context)
     parts: List[str] = []
     if base:
-        parts.append(_clip(base, 220))
+        parts.append(_clip(base, 180))
     if topic:
-        parts.append("موضوع صدا: " + _clip(topic, 220))
+        parts.append("موضوع صدا: " + _clip(topic, 160))
     used = len("\n".join(parts))
     remaining = _MAX_STT_PROMPT_CHARS - used - 80
     if context and remaining > 60:
-        word_budget = max(0, min(int(context_tokens or 0), 80))
+        word_budget = max(0, min(int(context_tokens or 0), 45))
         context_text = " ".join(context.split()[-word_budget:]) if word_budget else ""
         context_text = _clip(context_text, remaining)
         if context_text:
