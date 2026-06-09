@@ -165,7 +165,8 @@ async def deepgram_to_browser(
                 continue
             if payload_type == "UtteranceEnd":
                 await send_event(websocket, send_lock, "utterance.end", session_id=state.session_id, data=payload)
-                await maybe_schedule_analysis(websocket, send_lock, state, settings, force=True)
+                await maybe_schedule_analysis(websocket, send_lock, state, settings)
+                await maybe_schedule_analysis(websocket, send_lock, state, settings, resolve_only=True)
                 continue
             if payload_type in {"Error", "Warning"}:
                 await send_event(websocket, send_lock, "stt.error", session_id=state.session_id, data=payload)
@@ -188,5 +189,6 @@ async def deepgram_to_browser(
                     )
                 )
                 await maybe_schedule_analysis(websocket, send_lock, state, settings)
+                await maybe_schedule_analysis(websocket, send_lock, state, settings, resolve_only=True)
     finally:
         stop_event.set()
