@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import importlib
 
+from starlette.requests import Request
+
 _mod = importlib.import_module('.dg_runtime', __package__)
 getattr(_mod, 'install_dg_runtime')()
 
@@ -12,7 +14,7 @@ getattr(_routes, 'add_route')(_main.app)
 _dg = importlib.import_module('.dg_provider', __package__)
 
 
-async def _providers_with_dg(request):
+async def _providers_with_dg(request: Request):
     settings = request.app.state.settings
     cfg = getattr(_dg, 'get_dg_config')(settings)
     return {'default_provider': settings.transcription.default_provider, 'providers': [
