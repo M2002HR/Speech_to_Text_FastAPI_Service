@@ -11,17 +11,31 @@ param(
   [switch]$RequireLocalModel,
   [switch]$FailOnInvalidApiKey,
   [switch]$NonInteractive,
+  [switch]$Local,
+  [switch]$NoReload,
   [string]$Python = "",
-  [string]$HostName = "127.0.0.1",
+  [string]$HostName = "0.0.0.0",
   [int]$Port = 0,
   [string]$LocalModelId = "tiny",
   [string]$HfToken = "",
+  [string[]]$EnvVars = @(),
   [int]$StartupTimeoutSec = 120,
   [int]$SmokeTimeoutSec = 900
 )
 
+# Unified Tootak Windows launcher: installs everything and starts the full
+# service (transcription API + /live + /realtime) via api.app.server:app.
+#   .\scripts\start.ps1                 # LAN bind (0.0.0.0), setup + start
+#   .\scripts\start.ps1 -Local          # bind 127.0.0.1 only
+#   .\scripts\start.ps1 -NoStart        # full setup + checks, no server
+#   .\scripts\start.ps1 -Port 9000 -EnvVars "DEEPGRAM_API_KEY=xxx","LIVE_LANGUAGE=en"
+
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
+
+if ($Local) { $HostName = "127.0.0.1" }
+$UseReload = -not $NoReload
+$AppModule = "api.app.server:app"
 
 $script:StageIndex = 0
 $script:StageTotal = 12
@@ -72,8 +86,10 @@ function Fail {
 }
 
 function Write-BootstrapHelp {
-  Write-Log "HELP" "Optional skip flags: -SkipPackageInstall, -SkipLocalModelDownload, -SkipHfTokenPrompt, -SkipTests, -SkipApiKeyValidation, -SkipSmokeTests, -SkipFFmpegInstall, -NoStart" DarkCyan
-  Write-Log "HELP" "Useful modes: -NoStart for setup+tests only, -NonInteractive for unattended runs, -LocalModelId tiny|small|medium|large-v3" DarkCyan
+  Write-Log "HELP" "Unified launcher: installs everything and starts the full service (api.app.server:app -> /, /lab, /live, /realtime)." DarkCyan
+  Write-Log "HELP" "Network: default bind 0.0.0.0 (LAN). Use -Local for 127.0.0.1 only, -Port <n> for a custom port." DarkCyan
+  Write-Log "HELP" "Skip flags: -SkipPackageInstall, -SkipLocalModelDownload, -SkipHfTokenPrompt, -SkipTests, -SkipApiKeyValidation, -SkipSmokeTests, -SkipFFmpegInstall, -NoStart, -NoReload" DarkCyan
+  Write-Log "HELP" "Modes: -NoStart for setup+tests only, -NonInteractive for unattended runs, -LocalModelId tiny|small|medium|large-v3, -EnvVars 'KEY=VALUE','KEY2=VALUE2'" DarkCyan
 }
 
 function Invoke-Native {
@@ -794,6 +810,16 @@ print("Python import check passed:", ", ".join(mods))
   Import-DotEnv -FilePath $envFile
   [Environment]::SetEnvironmentVariable("APP_CONFIG_FILE", (Get-EnvValue "APP_CONFIG_FILE" "config/config.yml"), "Process")
 
+  if ($EnvVars -and $EnvVars.Count -gt 0) {
+    foreach ($pair in $EnvVars) {
+      if ([string]::IsNullOrWhiteSpace($pair)) { continue }
+      $kv = $pair -split "=", 2
+      if ($kv.Count -ne 2) { Fail "Bad -EnvVars value (expected KEY=VALUE): $pair" }
+      [Environment]::SetEnvironmentVariable($kv[0].Trim(), $kv[1], "Process")
+      Write-Ok "env: $($kv[0].Trim()) set from -EnvVars"
+    }
+  }
+
   $runtimeDir = Get-EnvValue "STORAGE_RUNTIME_DIR" "runtime"
   $uploadDir = Get-EnvValue "STORAGE_UPLOAD_DIR" "runtime/uploads"
   $outputDir = Get-EnvValue "STORAGE_OUTPUT_DIR" "runtime/outputs"
@@ -907,14 +933,9 @@ print("Local model is ready")
     $openaiProviderBase = Get-EnvValue "PROVIDER_OPENAI_BASE_URL" "https://api.openai.com"
     $groqKey = Get-EnvValue "PROVIDER_GROQ_API_KEY" ""
     $groqBase = Get-EnvValue "PROVIDER_GROQ_BASE_URL" "https://api.groq.com/openai"
-    $workerOpenAIKey = Get-EnvValue "OPENAI_API_KEY" ""
-    $workerOpenAIBase = Get-EnvValue "OPENAI_BASE_URL" "https://api.gapgpt.app/v1"
 
     $keyResults += Test-ProviderKey -Name "provider.openai" -BaseUrl $openaiProviderBase -ApiKey $openaiProviderKey
     $keyResults += Test-ProviderKey -Name "provider.groq" -BaseUrl $groqBase -ApiKey $groqKey
-    if ($workerOpenAIKey -and ($workerOpenAIKey -ne $openaiProviderKey -or $workerOpenAIBase -ne $openaiProviderBase)) {
-      $keyResults += Test-ProviderKey -Name "queue-worker.openai" -BaseUrl $workerOpenAIBase -ApiKey $workerOpenAIKey
-    }
 
     if ($FailOnInvalidApiKey -and ($keyResults -contains $false)) {
       Fail "At least one configured API key failed validation."
@@ -938,7 +959,7 @@ print("Local model is ready")
   Remove-Item -LiteralPath $apiOutLog, $apiErrLog -Force -ErrorAction SilentlyContinue
 
   $apiProcess = Start-Process -FilePath $venvPython `
-    -ArgumentList @("-m", "uvicorn", "api.app.main:app", "--host", $HostName, "--port", [string]$smokePort, "--log-level", "info") `
+    -ArgumentList @("-m", "uvicorn", $AppModule, "--host", $HostName, "--port", [string]$smokePort, "--log-level", "info") `
     -WorkingDirectory $repoRoot `
     -RedirectStandardOutput $apiOutLog `
     -RedirectStandardError $apiErrLog `
@@ -982,6 +1003,12 @@ with httpx.Client(timeout=httpx.Timeout(timeout), trust_env=False) as client:
     providers = client.get(f"{base_url}/providers")
     assert_status(providers)
     assert "providers" in providers.json()
+
+    realtime = client.get(f"{base_url}/realtime")
+    assert_status(realtime)
+    live = client.get(f"{base_url}/live")
+    assert_status(live)
+    print("Realtime and live panels reachable.")
 
     openapi = client.get(f"{base_url}/openapi.json")
     assert_status(openapi)
@@ -1050,8 +1077,17 @@ print("API smoke tests passed.")
 
   Write-Stage "Finish setup"
   Write-Ok "Windows setup completed successfully."
-  Write-Info "Web UI: http://$HostName`:$configuredPort/"
-  Write-Info "Swagger UI: http://$HostName`:$configuredPort/docs"
+  $localHost = if ($HostName -eq "0.0.0.0") { "127.0.0.1" } else { $HostName }
+  Write-Info "Panel:    http://$localHost`:$configuredPort/"
+  Write-Info "Lab:      http://$localHost`:$configuredPort/lab"
+  Write-Info "Live:     http://$localHost`:$configuredPort/live"
+  Write-Info "Realtime: http://$localHost`:$configuredPort/realtime"
+  Write-Info "Swagger:  http://$localHost`:$configuredPort/docs"
+  if ($HostName -eq "0.0.0.0") {
+    foreach ($ip in (Get-NetIPAddress -AddressFamily IPv4 -ErrorAction SilentlyContinue | Where-Object { $_.IPAddress -notlike "127.*" } | Select-Object -ExpandProperty IPAddress -Unique)) {
+      Write-Info "LAN:      http://$ip`:$configuredPort/"
+    }
+  }
   Write-Info "Logs: runtime/logs/"
 
   if ($SetupOnly -or $NoStart) {
@@ -1059,14 +1095,17 @@ print("API smoke tests passed.")
     exit 0
   }
 
-  Write-Stage "Start API service in foreground"
-  if (Test-PortOpen -HostValue $HostName -PortValue $configuredPort) {
+  Write-Stage "Start full service in foreground (api.app.server:app)"
+  $portCheckHost = if ($HostName -eq "0.0.0.0") { "127.0.0.1" } else { $HostName }
+  if (Test-PortOpen -HostValue $portCheckHost -PortValue $configuredPort) {
     Fail "Configured port $configuredPort is already in use. Stop the existing process or rerun with -Port <free-port>."
   }
   $env:APP_HOST = $HostName
   $env:APP_PORT = [string]$configuredPort
   Write-Info "Starting uvicorn. Press Ctrl+C to stop."
-  & $venvPython -m uvicorn api.app.main:app --host $HostName --port $configuredPort --reload
+  $uvicornArgs = @("-m", "uvicorn", $AppModule, "--host", $HostName, "--port", [string]$configuredPort)
+  if ($UseReload) { $uvicornArgs += "--reload" }
+  & $venvPython @uvicornArgs
   if ($LASTEXITCODE -ne 0) {
     Fail "uvicorn exited with code $LASTEXITCODE"
   }

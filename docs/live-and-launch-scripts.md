@@ -26,75 +26,82 @@ For LAN usage, open the LAN address printed by the launcher, for example:
 http://192.168.1.23:8030/live
 ```
 
-## Windows scripts
+## Launch scripts
 
-### Complete setup and start
+There is exactly one launcher per platform. Each one installs all
+dependencies and starts the full service in a single run, serving the
+transcription API plus `/live` and `/realtime` via `api.app.server:app`.
+
+- Linux/macOS: `scripts/start.sh`
+- Windows PowerShell: `scripts/start.ps1`
+- Windows CMD: `scripts/start.cmd` (forwards all arguments to `start.ps1`)
+
+Every behavior is configurable through arguments; nothing else is needed.
+
+## Windows
+
+### Complete setup and start (binds 0.0.0.0 for LAN by default)
 
 ```powershell
 Set-ExecutionPolicy -Scope Process Bypass -Force
-.\scripts\setup_and_start_windows.ps1
+.\scripts\start.ps1
 ```
 
-If PowerShell blocks script execution, use a one-time bypass:
+If PowerShell blocks script execution, use a one-time bypass (or run `start.cmd`):
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File .\scripts\setup_and_start_windows.ps1
+powershell -ExecutionPolicy Bypass -File .\scripts\start.ps1
 ```
 
-### Complete setup and start for LAN
+### Bind to localhost only
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File .\scripts\setup_and_start_windows_lan.ps1
+.\scripts\start.ps1 -Local
 ```
 
-### Start only
+### Setup only, no server
 
 ```powershell
-.\scripts\start_windows.ps1
+.\scripts\start.ps1 -NoStart
 ```
 
-`start_windows.ps1` does not install dependencies or run setup checks. It only starts the API from the existing `.venv`.
+Other flags: `-Port <n>`, `-LocalModelId small`, `-NoReload`,
+`-EnvVars "KEY=VALUE","KEY2=VALUE2"`, and the `-Skip*` flags.
 
-## Linux scripts
+## Linux/macOS
 
-Make scripts executable once:
+Make the script executable once:
 
 ```bash
-chmod +x scripts/setup_and_start_linux.sh scripts/setup_and_start_linux_lan.sh scripts/start_linux.sh
+chmod +x scripts/start.sh
 ```
 
-### Complete setup and start
+### Complete setup and start (binds 0.0.0.0 for LAN by default)
 
 ```bash
-./scripts/setup_and_start_linux.sh
+./scripts/start.sh
 ```
 
-### Complete setup and start for LAN
+### Bind to localhost only
 
 ```bash
-./scripts/setup_and_start_linux_lan.sh
+./scripts/start.sh --local
 ```
 
-### Start only
+### Setup only, no server
 
 ```bash
-./scripts/start_linux.sh
+./scripts/start.sh --no-start --skip-package-install --skip-tests --skip-smoke-tests
 ```
 
-`start_linux.sh` does not install dependencies or run setup checks. It only starts the API from the existing `.venv`.
-
-Useful Linux setup flags:
+### Override host/port and pass extra env vars
 
 ```bash
-./scripts/setup_and_start_linux.sh --no-start --skip-package-install --skip-tests --skip-smoke-tests
+./scripts/start.sh --host 0.0.0.0 --port 8030
+./scripts/start.sh -e DEEPGRAM_API_KEY=xxx -e LIVE_LANGUAGE=en
 ```
 
-Override host/port:
-
-```bash
-./scripts/setup_and_start_linux.sh --host 0.0.0.0 --port 8030
-./scripts/start_linux.sh --host 0.0.0.0 --port 8030
-```
+Run `./scripts/start.sh --help` for the full option list.
 
 ## Live accuracy settings
 

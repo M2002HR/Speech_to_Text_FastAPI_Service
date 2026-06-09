@@ -24,8 +24,9 @@ Features:
 - `config/config.example.yml`: example YAML config
 - `.env.example`: complete environment variable reference
 - `tests/`: API/config/service tests
-- `scripts/start.sh`: Linux/macOS startup script
-- `scripts/setup_and_start_windows.ps1`: complete Windows setup/start script
+- `scripts/start.sh`: single Linux/macOS launcher (installs everything + starts all services)
+- `scripts/start.ps1`: single Windows PowerShell launcher (installs everything + starts all services)
+- `scripts/start.cmd`: single Windows CMD launcher (forwards to `start.ps1`)
 
 ## Prerequisites
 
@@ -66,38 +67,46 @@ cp config/config.example.yml config/config.yml
 
 ### Windows (PowerShell)
 
-Full first-run setup without Docker:
+Full first-run setup without Docker — installs everything and starts the full
+service (transcription API + `/live` + `/realtime`):
 
 ```powershell
 Set-ExecutionPolicy -Scope Process Bypass -Force
-.\scripts\setup_and_start_windows.ps1
+.\scripts\start.ps1
 ```
 
-Setup only, without starting the foreground API process:
+From `cmd.exe` you can run `scripts\start.cmd` with the same arguments.
+
+Setup only, without starting the foreground server:
 
 ```powershell
-.\scripts\setup_and_start_windows.ps1 -NoStart
+.\scripts\start.ps1 -NoStart
 ```
 
 The script creates `.venv`, installs Python packages, creates `.env` and
 `config/config.yml` when missing, installs or downloads ffmpeg/ffprobe when
 needed, guides Hugging Face token setup when local model download is enabled,
 validates configured OpenAI/Groq keys when present, runs tests, starts a
-temporary API server for smoke checks, and then starts the API in foreground
-unless `-NoStart` is used.
+temporary server for smoke checks, and then starts the service in foreground
+unless `-NoStart` is used. It binds `0.0.0.0` (LAN) by default; use `-Local`
+for `127.0.0.1` only.
 
-Useful skip flags:
+Useful flags:
 
 ```powershell
-.\scripts\setup_and_start_windows.ps1 -NoStart -SkipPackageInstall -SkipLocalModelDownload -SkipHfTokenPrompt -SkipTests -SkipApiKeyValidation -SkipSmokeTests
+.\scripts\start.ps1 -NoStart -SkipPackageInstall -SkipLocalModelDownload -SkipHfTokenPrompt -SkipTests -SkipApiKeyValidation -SkipSmokeTests -NoReload
+.\scripts\start.ps1 -Local -Port 9000 -LocalModelId small
+.\scripts\start.ps1 -EnvVars "DEEPGRAM_API_KEY=hf_xxx","LIVE_LANGUAGE=en"
 ```
 
 If you want higher Hugging Face download limits, create a read token at
 `https://huggingface.co/settings/tokens` and either paste it when prompted or pass:
 
 ```powershell
-.\scripts\setup_and_start_windows.ps1 -HfToken "hf_..."
+.\scripts\start.ps1 -HfToken "hf_..."
 ```
+
+To set up the environment manually instead of using the launcher:
 
 ```powershell
 python -m venv .venv
@@ -109,29 +118,42 @@ Copy-Item config\config.example.yml config\config.yml
 
 ## Run the Service
 
+The unified ASGI app `api.app.server:app` serves every feature in one process:
+the transcription API and web panels (`/`, `/lab`), the `/live` websocket, and
+the `/realtime` streaming panel.
+
 ### Linux/macOS
-
-```bash
-uvicorn api.app.main:app --host 0.0.0.0 --port 8030 --reload
-```
-
-or
 
 ```bash
 chmod +x scripts/start.sh
 ./scripts/start.sh
 ```
 
+`start.sh` installs everything and starts the service. Common options:
+
+```bash
+./scripts/start.sh --local --port 9000              # bind 127.0.0.1 only
+./scripts/start.sh --no-start --skip-tests          # setup + checks, no server
+./scripts/start.sh -e DEEPGRAM_API_KEY=xxx          # pass extra env vars
+./scripts/start.sh --help                           # full option list
+```
+
+To run uvicorn directly against an already-prepared `.venv`:
+
+```bash
+uvicorn api.app.server:app --host 0.0.0.0 --port 8030 --reload
+```
+
 ### Windows (PowerShell)
 
 ```powershell
-python -m uvicorn api.app.main:app --host 0.0.0.0 --port 8030 --reload
+.\scripts\start.ps1
 ```
 
-or
+To run uvicorn directly against an already-prepared `.venv`:
 
 ```powershell
-.\scripts\setup_and_start_windows.ps1
+python -m uvicorn api.app.server:app --host 0.0.0.0 --port 8030 --reload
 ```
 
 ## API Docs
@@ -236,31 +258,6 @@ pytest -q
 
 ```powershell
 pytest -q
-```
-
-## Remote Queue Worker (Bale Bot Pipeline)
-
-This service can run a local queue worker that pulls voice jobs from the remote Bale bot server, transcribes with local model, sends text to OpenAI, and pushes final file back to the server.
-
-Run worker (Linux/macOS):
-
-```bash
-chmod +x scripts/start_queue_worker.sh
-./scripts/start_queue_worker.sh
-```
-
-Worker config lives in `.env` (see section `Remote Queue Worker (Bale Bot Integration)` in `.env.example`).
-
-If LLM requests fail intermittently with DNS errors, set `OPENAI_PROXY_URL` in `.env` and keep retry controls enabled:
-- `OPENAI_RETRY_ROUNDS` (default `3`)
-- `OPENAI_RETRY_BACKOFF_SEC` (default `1.2`)
-
-Optional auto-start via systemd:
-
-```bash
-sudo cp scripts/systemd/tootak-local-queue-worker.service /etc/systemd/system/
-sudo systemctl daemon-reload
-sudo systemctl enable --now tootak-local-queue-worker.service
 ```
 
 ## Configuration Priority
