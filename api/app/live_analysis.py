@@ -46,11 +46,7 @@ async def send_event(
     event_type: str,
     **payload: Any,
 ) -> None:
-    message = {
-        "type": event_type,
-        "ts": time.time(),
-        **payload,
-    }
+    message = {"type": event_type, "ts": time.time(), **payload}
     async with send_lock:
         await websocket.send_json(message)
 
@@ -65,7 +61,33 @@ def analysis_schema(strict: bool) -> Dict[str, Any]:
                 "type": "object",
                 "properties": {
                     "should_alert_teacher": {"type": "boolean"},
-                    "alert_level": {"type": "string", "enum": ["none", "low", "medium", "high"]},
+                    "alert_level": {"type": "string", "enum": ["none", "low", "medium", "high", "critical"]},
+                    "alert_category": {
+                        "type": "string",
+                        "enum": [
+                            "none",
+                            "needs_example",
+                            "unclear_explanation",
+                            "too_fast_or_dense",
+                            "wrong_statement",
+                            "teacher_slip",
+                            "prerequisite_gap",
+                            "student_check_needed",
+                            "topic_management",
+                            "positive_feedback",
+                        ],
+                    },
+                    "severity_label": {
+                        "type": "string",
+                        "enum": [
+                            "none",
+                            "info",
+                            "suggestion",
+                            "important",
+                            "urgent",
+                            "critical_correction",
+                        ],
+                    },
                     "issue_type": {
                         "type": "string",
                         "enum": [
@@ -76,8 +98,35 @@ def analysis_schema(strict: bool) -> Dict[str, Any]:
                             "topic_jump",
                             "prerequisite_gap",
                             "needs_check_for_understanding",
+                            "incorrect_content",
+                            "misleading_statement",
+                            "teacher_misspoke",
                             "good_progress",
                         ],
+                    },
+                    "tags": {
+                        "type": "array",
+                        "items": {
+                            "type": "string",
+                            "enum": [
+                                "مثال لازم دارد",
+                                "توضیح مبهم",
+                                "توضیح نامناسب",
+                                "خیلی فشرده",
+                                "خیلی سریع",
+                                "اشتباه علمی",
+                                "بیان گمراه‌کننده",
+                                "سوتی یا لغزش کلامی",
+                                "پیش‌نیاز جا افتاده",
+                                "نیاز به سوال از کلاس",
+                                "پرش موضوعی",
+                                "شدید و فوری",
+                                "قابل توجه",
+                                "خوب پیش می‌رود",
+                            ],
+                        },
+                        "minItems": 0,
+                        "maxItems": 5,
                     },
                     "confidence": {"type": "number", "minimum": 0, "maximum": 1},
                     "short_feedback": {"type": "string"},
@@ -89,7 +138,10 @@ def analysis_schema(strict: bool) -> Dict[str, Any]:
                 "required": [
                     "should_alert_teacher",
                     "alert_level",
+                    "alert_category",
+                    "severity_label",
                     "issue_type",
+                    "tags",
                     "confidence",
                     "short_feedback",
                     "suggested_teacher_action",
@@ -109,8 +161,10 @@ def analysis_system_prompt() -> str:
         "You observe a live Persian classroom transcript and help the teacher improve clarity. "
         "Be conservative: only alert when the transcript gives clear evidence. "
         "Prefer short, actionable teacher hints in Persian. "
-        "Do not criticize tone or personality. Focus on pedagogy: unclear definitions, missing examples, "
-        "prerequisite gaps, sudden topic jumps, too much abstraction, and good moments worth continuing. "
+        "Classify every hint with alert_category, severity_label, issue_type, and Persian tags. "
+        "Use wrong_statement or critical_correction only when there is clear evidence that the content is incorrect, not merely incomplete. "
+        "Use teacher_slip for obvious misspeaking, naming mistakes, number slips, or accidental wording that the teacher can quickly correct. "
+        "Do not criticize tone or personality. Focus on pedagogy: unclear definitions, missing examples, prerequisite gaps, sudden topic jumps, dense explanations, and good moments worth continuing. "
         "Return only structured JSON matching the schema."
     )
 
@@ -125,11 +179,26 @@ def analysis_user_prompt(state: LiveSessionState, settings: LiveSettings, segmen
         f"{context}\n\n"
         "Latest segment to evaluate:\n"
         f"{segment}\n\n"
+        "Classification guide:\n"
+        "- needs_example: explanation is probably okay but would benefit from a concrete example.\n"
+        "- unclear_explanation: explanation is vague, ambiguous, or hard to follow.\n"
+        "- too_fast_or_dense: too many ideas or terms are compressed together.\n"
+        "- wrong_statement: the transcript clearly says something factually or conceptually wrong.\n"
+        "- teacher_slip: likely misspeaking or a small verbal slip that should be corrected.\n"
+        "- prerequisite_gap: a required prior concept was used without explanation.\n"
+        "- student_check_needed: teacher should ask a quick understanding question.\n"
+        "- positive_feedback: the current explanation is clear and useful.\n\n"
+        "Severity guide:\n"
+        "- suggestion: helpful but not necessary.\n"
+        "- important: likely affects student understanding.\n"
+        "- urgent: should be addressed soon.\n"
+        "- critical_correction: likely wrong or misleading content must be corrected.\n\n"
         "Decision rules:\n"
-        "- If the explanation is acceptable, set should_alert_teacher=false and issue_type=none or good_progress.\n"
-        "- If an example would materially improve understanding, suggest one concise example.\n"
+        "- If the explanation is acceptable, set should_alert_teacher=false and use alert_category=none or positive_feedback.\n"
+        "- If an example would materially improve understanding, use alert_category=needs_example and include suggested_example.\n"
+        "- If content seems wrong, be careful: flag wrong_statement only with concrete evidence from the transcript.\n"
         "- Feedback must be short enough to show on a teacher dashboard while teaching.\n"
-        "- Use Persian for short_feedback, suggested_teacher_action, suggested_example, and evidence."
+        "- Use Persian for tags, short_feedback, suggested_teacher_action, suggested_example, and evidence."
     )
 
 
@@ -150,19 +219,34 @@ def extract_json_object(text: str) -> Dict[str, Any]:
     return {}
 
 
+def _normalize_analysis_result(parsed: Dict[str, Any]) -> Dict[str, Any]:
+    parsed.setdefault("should_alert_teacher", False)
+    parsed.setdefault("alert_level", "none")
+    parsed.setdefault("alert_category", "none")
+    parsed.setdefault("severity_label", "none")
+    parsed.setdefault("issue_type", "none")
+    tags = parsed.get("tags")
+    if not isinstance(tags, list):
+        parsed["tags"] = []
+    else:
+        parsed["tags"] = [str(tag) for tag in tags[:5] if str(tag).strip()]
+    parsed.setdefault("confidence", 0.0)
+    parsed.setdefault("short_feedback", "")
+    parsed.setdefault("suggested_teacher_action", "")
+    parsed.setdefault("suggested_example", "")
+    parsed.setdefault("evidence", "")
+    parsed.setdefault("segment_summary", "")
+    return parsed
+
+
 async def call_groq_analysis(settings: LiveSettings, state: LiveSessionState, segment: str) -> Dict[str, Any]:
     if not settings.llm_api_key:
-        return {
-            "should_alert_teacher": False,
-            "alert_level": "none",
-            "issue_type": "none",
-            "confidence": 0.0,
-            "short_feedback": "LLM API key تنظیم نشده است.",
-            "suggested_teacher_action": "",
-            "suggested_example": "",
-            "evidence": "",
-            "segment_summary": "",
-        }
+        return _normalize_analysis_result(
+            {
+                "should_alert_teacher": False,
+                "short_feedback": "LLM API key تنظیم نشده است.",
+            }
+        )
 
     url = settings.llm_base_url.rstrip("/") + "/chat/completions"
     payload = {
@@ -175,10 +259,7 @@ async def call_groq_analysis(settings: LiveSettings, state: LiveSessionState, se
         "max_completion_tokens": settings.llm_max_tokens,
         "response_format": analysis_schema(settings.llm_strict_schema),
     }
-    headers = {
-        "Authorization": f"Bearer {settings.llm_api_key}",
-        "Content-Type": "application/json",
-    }
+    headers = {"Authorization": f"Bearer {settings.llm_api_key}", "Content-Type": "application/json"}
 
     async with httpx.AsyncClient(timeout=settings.llm_timeout_sec) as client:
         resp = await client.post(url, headers=headers, json=payload)
@@ -187,22 +268,9 @@ async def call_groq_analysis(settings: LiveSettings, state: LiveSessionState, se
         raise HTTPException(status_code=resp.status_code, detail=resp.text[:700])
 
     data = resp.json()
-    content = (
-        ((data.get("choices") or [{}])[0].get("message") or {}).get("content")
-        if isinstance(data, dict)
-        else ""
-    )
+    content = (((data.get("choices") or [{}])[0].get("message") or {}).get("content") if isinstance(data, dict) else "")
     parsed = extract_json_object(str(content or ""))
-    parsed.setdefault("should_alert_teacher", False)
-    parsed.setdefault("alert_level", "none")
-    parsed.setdefault("issue_type", "none")
-    parsed.setdefault("confidence", 0.0)
-    parsed.setdefault("short_feedback", "")
-    parsed.setdefault("suggested_teacher_action", "")
-    parsed.setdefault("suggested_example", "")
-    parsed.setdefault("evidence", "")
-    parsed.setdefault("segment_summary", "")
-    return parsed
+    return _normalize_analysis_result(parsed)
 
 
 async def run_analysis_task(
@@ -214,36 +282,15 @@ async def run_analysis_task(
     from_index: int,
     to_index: int,
 ) -> None:
-    await send_event(
-        websocket,
-        send_lock,
-        "analysis.started",
-        session_id=state.session_id,
-        from_index=from_index,
-        to_index=to_index,
-    )
+    await send_event(websocket, send_lock, "analysis.started", session_id=state.session_id, from_index=from_index, to_index=to_index)
     try:
         if settings.llm_provider != "groq":
             raise HTTPException(status_code=400, detail=f"unsupported live LLM provider: {settings.llm_provider}")
         result = await call_groq_analysis(settings, state, segment)
-        await send_event(
-            websocket,
-            send_lock,
-            "teacher.hint",
-            session_id=state.session_id,
-            from_index=from_index,
-            to_index=to_index,
-            result=result,
-        )
+        await send_event(websocket, send_lock, "teacher.hint", session_id=state.session_id, from_index=from_index, to_index=to_index, result=result)
     except Exception as exc:
         detail = exc.detail if isinstance(exc, HTTPException) else str(exc)
-        await send_event(
-            websocket,
-            send_lock,
-            "analysis.error",
-            session_id=state.session_id,
-            error=str(detail),
-        )
+        await send_event(websocket, send_lock, "analysis.error", session_id=state.session_id, error=str(detail))
 
 
 async def maybe_schedule_analysis(
@@ -274,6 +321,4 @@ async def maybe_schedule_analysis(
     to_index = len(state.final_chunks)
     state.analyzed_index = to_index
     state.last_analysis_at = now
-    state.analysis_task = asyncio.create_task(
-        run_analysis_task(websocket, send_lock, state, settings, pending, from_index, to_index)
-    )
+    state.analysis_task = asyncio.create_task(run_analysis_task(websocket, send_lock, state, settings, pending, from_index, to_index))
