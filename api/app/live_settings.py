@@ -70,6 +70,12 @@ class LiveSettings:
     keyterms: List[str] = field(default_factory=list)
     keywords: List[str] = field(default_factory=list)
     keepalive_sec: float = 5.0
+    open_timeout_sec: float = 45.0
+    close_timeout_sec: float = 10.0
+    ping_interval_sec: float = 20.0
+    ping_timeout_sec: float = 20.0
+    connect_retries: int = 2
+    connect_retry_backoff_sec: float = 2.0
 
     llm_enabled: bool = True
     llm_provider: str = "groq"
@@ -117,6 +123,12 @@ class LiveSettings:
             keyterms=env_csv("LIVE_DEEPGRAM_KEYTERMS"),
             keywords=env_csv("LIVE_DEEPGRAM_KEYWORDS"),
             keepalive_sec=env_float("LIVE_DEEPGRAM_KEEPALIVE_SEC", 5.0),
+            open_timeout_sec=env_float("LIVE_DEEPGRAM_OPEN_TIMEOUT_SEC", 45.0),
+            close_timeout_sec=env_float("LIVE_DEEPGRAM_CLOSE_TIMEOUT_SEC", 10.0),
+            ping_interval_sec=env_float("LIVE_DEEPGRAM_PING_INTERVAL_SEC", 20.0),
+            ping_timeout_sec=env_float("LIVE_DEEPGRAM_PING_TIMEOUT_SEC", 20.0),
+            connect_retries=env_int("LIVE_DEEPGRAM_CONNECT_RETRIES", 2),
+            connect_retry_backoff_sec=env_float("LIVE_DEEPGRAM_CONNECT_RETRY_BACKOFF_SEC", 2.0),
             llm_enabled=env_bool("LIVE_LLM_ENABLED", True),
             llm_provider=os.getenv("LIVE_LLM_PROVIDER", "groq").strip().lower() or "groq",
             llm_api_key=groq_key.strip(),
@@ -146,6 +158,9 @@ class LiveSettings:
                 "encoding": self.encoding,
                 "sample_rate": self.sample_rate,
                 "channels": self.channels,
+                "open_timeout_sec": self.open_timeout_sec,
+                "connect_retries": self.connect_retries,
+                "connect_retry_backoff_sec": self.connect_retry_backoff_sec,
             },
             "llm": {
                 "enabled": self.llm_enabled,
