@@ -31,7 +31,7 @@ button:disabled { opacity: .45; cursor: not-allowed; }
 .transcript, .events, .mini { white-space: pre-wrap; direction: rtl; text-align: right; background: rgba(0,0,0,.26); border: 1px solid rgba(255,255,255,.08); border-radius: 18px; padding: 16px; min-height: 120px; overflow: auto; }
 .events, .mini { direction: ltr; text-align: left; font-size: .85rem; min-height: 80px; }
 .hints { display: grid; gap: 12px; }
-.hint-card { border: 1px solid rgba(255,255,255,.1); border-radius: 18px; padding: 14px; background: rgba(0,0,0,.18); }
+.hint-card { border: 1px solid rgba(255,255,255,.1); border-radius: 18px; padding: 14px; background: rgba(0,0,0,.18); transition: border-color .2s ease, background .2s ease, opacity .2s ease; }
 .hint-card strong { display: block; margin-bottom: 8px; }
 .hint-badges { display: flex; flex-wrap: wrap; gap: 6px; margin: 10px 0 8px; }
 .hint-badge { display: inline-flex; align-items: center; border-radius: 999px; padding: 5px 9px; background: rgba(255,255,255,.1); color: rgba(247,247,251,.86); font-size: .82rem; }
@@ -39,4 +39,10 @@ button:disabled { opacity: .45; cursor: not-allowed; }
 .hint-important { border-color: rgba(255,198,87,.50); background: rgba(255,198,87,.10); }
 .hint-urgent, .hint-critical_correction { border-color: rgba(255,105,105,.60); background: rgba(255,105,105,.12); }
 .hint-info { border-color: rgba(36,205,129,.40); background: rgba(36,205,129,.09); }
+.issue-status { margin: 8px 0; border-radius: 14px; padding: 9px 11px; border: 1px solid rgba(255,255,255,.10); font-size: .9rem; }
+.issue-status span { color: rgba(247,247,251,.72); }
+.issue-open { border-color: rgba(255,198,87,.50); background: rgba(255,198,87,.09); }
+.issue-probably { border-color: rgba(110,168,254,.55); background: rgba(110,168,254,.10); }
+.issue-resolved { border-color: rgba(36,205,129,.60); background: rgba(36,205,129,.12); }
+.hint-card.issue-resolved { opacity: .78; }
 @media (max-width: 820px) { .grid, .hero { grid-template-columns: 1fr; display: grid; } }
