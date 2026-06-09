@@ -28,7 +28,7 @@ async def connect_deepgram(url: str, api_key: str, settings: Optional[LiveSettin
     except Exception as exc:  # pragma: no cover
         raise RuntimeError("websockets package is required for live Deepgram streaming") from exc
 
-    settings = settings or LiveSettings()
+    settings = settings or LiveSettings.from_env()
     headers = {"Authorization": f"Token {api_key}"}
     attempts = max(1, int(settings.connect_retries or 1))
     last_exc: Optional[BaseException] = None
