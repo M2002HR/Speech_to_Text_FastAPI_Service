@@ -4,7 +4,7 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Tootak Realtime Classroom</title>
-  <link rel="stylesheet" href="/ui-assets/realtime.css?v=20260609b" />
+  <link rel="stylesheet" href="/ui-assets/realtime.css?v=20260609d" />
 </head>
 <body>
   <main class="shell">
@@ -14,10 +14,7 @@
         <h1>کلاس زنده: تبدیل گفتار به متن و بازخورد آموزشی</h1>
         <p class="muted">از میکروفون زنده استفاده کن یا فایل صوتی/ویدیویی کلاس را آپلود کن تا با سرعت شبه‌زنده پردازش شود.</p>
       </div>
-      <div class="hero-side">
-        <a class="link-btn" href="/">پنل کاربری</a>
-        <div class="status-pill" id="statusPill">در حال بررسی...</div>
-      </div>
+      <div class="hero-side"><div class="status-pill" id="statusPill">در حال بررسی...</div></div>
     </section>
 
     <section class="main-grid">
@@ -37,9 +34,17 @@
             <label class="check"><input id="diarize" type="checkbox" /><span>تشخیص گوینده‌ها</span></label>
             <label class="check"><input id="autoScroll" type="checkbox" checked /><span>اسکرول خودکار متن و لاگ</span></label>
             <label class="check"><input id="showJsonLog" type="checkbox" checked /><span>نمایش جزئیات Event log</span></label>
+            <label class="check"><input id="issueTrackingEnabled" type="checkbox" checked /><span>نگه‌داری و پیگیری هشدارها</span></label>
+            <label class="check"><input id="issueResolutionEnabled" type="checkbox" checked /><span>بررسی خودکار رفع‌شدن هشدارها</span></label>
           </div>
-          <div class="form-grid compact-grid"><label><span>حداکثر تعداد لاگ</span><input id="maxLogItems" type="number" min="20" max="400" step="10" value="120" /></label></div>
-          <p class="muted small-note">زبان، موضوع، اصطلاحات کلیدی و تشخیص گوینده به همان session ارسال می‌شوند. گزینه‌های اسکرول و نمایش لاگ رفتار داشبورد را کنترل می‌کنند.</p>
+          <div class="form-grid compact-grid">
+            <label><span>بررسی هشدارها هر چند ثانیه</span><input id="analysisIntervalSec" type="number" min="20" max="3600" step="10" value="180" /></label>
+            <label><span>بررسی رفع هشدارها هر چند ثانیه</span><input id="resolutionIntervalSec" type="number" min="30" max="7200" step="10" value="300" /></label>
+            <label><span>حداقل کاراکتر برای تحلیل</span><input id="llmMinChars" type="number" min="80" max="3000" step="20" value="220" /></label>
+            <label><span>حداکثر تعداد لاگ</span><input id="maxLogItems" type="number" min="20" max="400" step="10" value="120" /></label>
+          </div>
+          <div class="actions"><button id="manualAnalyzeBtn" class="secondary" type="button" disabled>بررسی هشدار جدید</button><button id="manualResolveBtn" class="secondary" type="button" disabled>بررسی رفع هشدارها</button></div>
+          <p class="muted small-note">پیش‌فرض: هشدارها هر ۳ دقیقه و رفع‌شدن آن‌ها هر ۵ دقیقه بررسی می‌شود. دکمه‌ها بررسی دستی را خارج از تایمر اجرا می‌کنند.</p>
         </details>
         <div class="actions sticky-actions"><button id="startBtn" type="submit">شروع</button><button id="stopBtn" type="button" disabled>توقف</button></div>
         <pre id="runtimeStatus" class="mini scroll-box"></pre>
@@ -49,6 +54,6 @@
     <section class="card stack transcript-card"><div class="section-head"><h2>زیرنویس زنده</h2><span class="chip">Live transcript</span></div><div id="partial" class="partial scroll-box">...</div><h3>متن نهایی‌شده</h3><pre id="finalText" class="transcript scroll-box"></pre></section>
     <section class="card stack log-card"><div class="section-head"><h2>Event log</h2><span class="chip">Debug</span></div><pre id="events" class="events scroll-box"></pre></section>
   </main>
-  <script src="/ui-assets/realtime.js?v=20260609b"></script>
+  <script src="/ui-assets/realtime.js?v=20260609d"></script>
 </body>
 </html>
