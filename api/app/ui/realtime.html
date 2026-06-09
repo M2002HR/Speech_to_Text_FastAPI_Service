@@ -4,48 +4,51 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Tootak Realtime Classroom</title>
-  <link rel="stylesheet" href="/ui-assets/realtime.css" />
+  <link rel="stylesheet" href="/ui-assets/realtime.css?v=20260609b" />
 </head>
 <body>
   <main class="shell">
     <section class="hero card">
-      <div>
+      <div class="hero-copy">
         <p class="eyebrow">Tootak · Realtime</p>
         <h1>کلاس زنده: تبدیل گفتار به متن و بازخورد آموزشی</h1>
         <p class="muted">از میکروفون زنده استفاده کن یا فایل صوتی/ویدیویی کلاس را آپلود کن تا با سرعت شبه‌زنده پردازش شود.</p>
       </div>
-      <div class="status-pill" id="statusPill">در حال بررسی...</div>
+      <div class="hero-side">
+        <a class="link-btn" href="/">پنل کاربری</a>
+        <div class="status-pill" id="statusPill">در حال بررسی...</div>
+      </div>
     </section>
 
-    <section class="grid">
-      <form id="controlForm" class="card stack">
-        <h2>تنظیمات جلسه</h2>
-        <label><span>منبع صدا</span><select id="sourceMode"><option value="mic">میکروفون زنده</option><option value="upload">فایل آپلودشده</option></select></label>
-        <label id="fileRow"><span>فایل صوتی/ویدیویی کلاس</span><input id="mediaFile" type="file" accept="audio/*,video/*" /></label>
-        <div class="actions"><button id="uploadBtn" type="button">آپلود فایل</button><span id="uploadHint" class="muted">فایلی آپلود نشده است.</span></div>
-        <label><span>زبان</span><select id="language"><option value="fa">فارسی</option><option value="en">English</option><option value="">Auto</option></select></label>
-        <label><span>موضوع درس</span><input id="topic" placeholder="مثلاً مشتق، تاریخ ایران، مدار منطقی..." /></label>
-        <label><span>اصطلاحات کلیدی</span><input id="keyterms" placeholder="با ویرگول جدا کن" /></label>
-        <label class="check"><input id="diarize" type="checkbox" /><span>تشخیص گوینده‌ها</span></label>
-        <div class="actions"><button id="startBtn" type="submit">شروع</button><button id="stopBtn" type="button" disabled>توقف</button></div>
-        <pre id="runtimeStatus" class="mini"></pre>
+    <section class="main-grid">
+      <form id="controlForm" class="card stack control-card">
+        <div class="section-head"><h2>تنظیمات جلسه</h2><span class="chip">Session</span></div>
+        <div class="form-grid">
+          <label><span>منبع صدا</span><select id="sourceMode"><option value="upload">فایل آپلودشده</option><option value="mic">میکروفون زنده</option></select></label>
+          <label><span>زبان</span><select id="language"><option value="fa">فارسی</option><option value="en">English</option><option value="">Auto</option></select></label>
+          <label><span>موضوع درس</span><input id="topic" placeholder="مثلاً مشتق، تاریخ ایران، مدار منطقی..." /></label>
+          <label><span>اصطلاحات کلیدی</span><input id="keyterms" placeholder="با ویرگول جدا کن" /></label>
+        </div>
+        <label id="fileRow" class="file-field"><span>فایل صوتی/ویدیویی کلاس</span><input id="mediaFile" type="file" accept="audio/*,video/*" /></label>
+        <div class="actions upload-row"><button id="uploadBtn" type="button">آپلود فایل</button><span id="uploadHint" class="muted">فایلی آپلود نشده است.</span></div>
+        <details class="settings-panel" open>
+          <summary>تنظیمات قابل تغییر از UI</summary>
+          <div class="toggle-grid">
+            <label class="check"><input id="diarize" type="checkbox" /><span>تشخیص گوینده‌ها</span></label>
+            <label class="check"><input id="autoScroll" type="checkbox" checked /><span>اسکرول خودکار متن و لاگ</span></label>
+            <label class="check"><input id="showJsonLog" type="checkbox" checked /><span>نمایش جزئیات Event log</span></label>
+          </div>
+          <div class="form-grid compact-grid"><label><span>حداکثر تعداد لاگ</span><input id="maxLogItems" type="number" min="20" max="400" step="10" value="120" /></label></div>
+          <p class="muted small-note">زبان، موضوع، اصطلاحات کلیدی و تشخیص گوینده به همان session ارسال می‌شوند. گزینه‌های اسکرول و نمایش لاگ رفتار داشبورد را کنترل می‌کنند.</p>
+        </details>
+        <div class="actions sticky-actions"><button id="startBtn" type="submit">شروع</button><button id="stopBtn" type="button" disabled>توقف</button></div>
+        <pre id="runtimeStatus" class="mini scroll-box"></pre>
       </form>
-
-      <section class="card stack">
-        <h2>هشدارهای استاد</h2>
-        <div id="hints" class="hints"><p class="muted">هنوز بازخوردی تولید نشده است.</p></div>
-      </section>
+      <section class="card stack hints-card"><div class="section-head"><h2>هشدارهای استاد</h2><span class="chip">Feedback</span></div><div id="hints" class="hints scroll-box"><p class="muted">هنوز بازخوردی تولید نشده است.</p></div></section>
     </section>
-
-    <section class="card stack">
-      <h2>زیرنویس زنده</h2>
-      <div id="partial" class="partial">...</div>
-      <h3>متن نهایی‌شده</h3>
-      <pre id="finalText" class="transcript"></pre>
-    </section>
-
-    <section class="card stack"><h2>Event log</h2><pre id="events" class="events"></pre></section>
+    <section class="card stack transcript-card"><div class="section-head"><h2>زیرنویس زنده</h2><span class="chip">Live transcript</span></div><div id="partial" class="partial scroll-box">...</div><h3>متن نهایی‌شده</h3><pre id="finalText" class="transcript scroll-box"></pre></section>
+    <section class="card stack log-card"><div class="section-head"><h2>Event log</h2><span class="chip">Debug</span></div><pre id="events" class="events scroll-box"></pre></section>
   </main>
-  <script src="/ui-assets/realtime.js"></script>
+  <script src="/ui-assets/realtime.js?v=20260609b"></script>
 </body>
 </html>
