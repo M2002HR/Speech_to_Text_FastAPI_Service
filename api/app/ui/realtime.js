@@ -174,6 +174,7 @@ function handleMessage(event) {
   log(data.type, data);
   if (data.type === 'transcript.partial') {
     partial.textContent = data.text || '';
+    if (typeof data.lag_seconds === 'number') setStatus(`زنده · تأخیر پشت صدا: ${data.lag_seconds.toFixed(1)}s`, data.lag_seconds <= 3 ? 'status-ok' : 'status-warn');
     if (shouldAutoScroll()) partial.scrollTop = partial.scrollHeight;
   }
   if (data.type === 'transcript.final' && data.text) {
@@ -182,9 +183,10 @@ function handleMessage(event) {
     finalText.textContent = state.finalParts.join('\n');
     if (shouldAutoScroll()) finalText.scrollTop = finalText.scrollHeight;
   }
+  if (data.type === 'file.playback.slow') setStatus(`گلوگاه: ${data.bottleneck} (read ${data.read_ms}ms / send ${data.send_ms}ms)`, 'status-warn');
   if (data.type === 'teacher.hint') addHint(data.result);
   if (data.type === 'teacher.issue.updated' || data.type === 'teacher.issue.resolved') applyIssueUpdate(data.issue, data.type);
-  if (data.type === 'file.playback.progress') setStatus(`در حال پخش فایل: ${data.audio_seconds}s`, 'status-ok');
+  if (data.type === 'file.playback.progress') setStatus(`پخش فایل: صدا ${data.audio_seconds}s / زمان واقعی ${data.wall_seconds ?? '?'}s${data.slow_events ? ` · کندی×${data.slow_events}` : ''}`, 'status-ok');
   if (data.type === 'stt.open') setStatus('STT stream باز شد', 'status-ok');
   if (data.type === 'session.closed') setStatus('جلسه بسته شد', 'status-warn');
   if (data.type === 'error' || data.type === 'stt.error' || data.type === 'analysis.error' || data.type === 'file.playback.error') setStatus(data.error || data.message || 'خطا', 'status-bad');

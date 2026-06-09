@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import time
 from typing import Any, Dict, Optional
 
 from fastapi import WebSocket, WebSocketDisconnect
@@ -196,7 +197,19 @@ async def deepgram_to_browser(
                 continue
 
             event_type = "transcript.final" if transcript["is_final"] else "transcript.partial"
-            await send_event(websocket, sender, event_type, session_id=state.session_id, **transcript)
+            # How far this transcript trails the audio it covers. In file mode
+            # audio is paced to 1x, so this is (pacing offset + Deepgram round
+            # trip); in live mic mode there is no pacing, so it is purely the
+            # Deepgram processing + network latency. A small, roughly constant
+            # value => API latency; a value that climbs over time => the stream
+            # is backing up.
+            lag_seconds: Optional[float] = None
+            if state.stream_started_at and transcript.get("end") is not None:
+                try:
+                    lag_seconds = round((time.monotonic() - state.stream_started_at) - float(transcript["end"]), 2)
+                except Exception:
+                    lag_seconds = None
+            await send_event(websocket, sender, event_type, session_id=state.session_id, lag_seconds=lag_seconds, **transcript)
 
             if transcript["is_final"]:
                 state.final_chunks.append(

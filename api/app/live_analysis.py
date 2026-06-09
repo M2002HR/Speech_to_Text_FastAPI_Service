@@ -58,6 +58,9 @@ class LiveSessionState:
     last_resolution_at: float = 0.0
     analysis_task: Optional[asyncio.Task] = None
     tracked_issues: Dict[str, TeacherIssue] = field(default_factory=dict)
+    # monotonic clock at the moment audio started flowing to Deepgram; used to
+    # measure how far each returned transcript lags behind the audio it covers.
+    stream_started_at: float = 0.0
 
     def final_text(self) -> str:
         return " ".join(chunk.text for chunk in self.final_chunks if chunk.text).strip()

@@ -135,6 +135,7 @@ async def _file_to_deepgram(
     )
     sent_bytes = 0
     started = time.monotonic()
+    state.stream_started_at = started
     await send_event(
         websocket,
         sender,
