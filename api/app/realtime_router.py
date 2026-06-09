@@ -124,7 +124,6 @@ async def _file_to_deepgram(
                 )
         await deepgram_ws.send(json.dumps({"type": "CloseStream"}))
     finally:
-        stop_event.set()
         if proc.returncode is None:
             proc.terminate()
             try:
@@ -263,39 +262,44 @@ async def realtime_ws(websocket: WebSocket) -> None:
         await send_event(websocket, send_lock, "stt.open", session_id=state.session_id)
 
         if source == "upload" and upload_session:
-            tasks = [
-                asyncio.create_task(
-                    _file_to_deepgram(
-                        websocket,
-                        send_lock,
-                        stt_ws,
-                        state,
-                        settings,
-                        Path(str(upload_session["prepared_path"])),
-                        stop_event,
-                    )
-                ),
-                asyncio.create_task(deepgram_to_browser(websocket, send_lock, stt_ws, state, settings, stop_event)),
-                asyncio.create_task(keepalive_loop(stt_ws, settings, stop_event)),
-            ]
+            sender_task = asyncio.create_task(
+                _file_to_deepgram(
+                    websocket,
+                    send_lock,
+                    stt_ws,
+                    state,
+                    settings,
+                    Path(str(upload_session["prepared_path"])),
+                    stop_event,
+                )
+            )
+            receiver_task = asyncio.create_task(deepgram_to_browser(websocket, send_lock, stt_ws, state, settings, stop_event))
+            keepalive_task = asyncio.create_task(keepalive_loop(stt_ws, settings, stop_event))
+            tasks = [sender_task, receiver_task, keepalive_task]
+
+            await sender_task
+            try:
+                await asyncio.wait_for(receiver_task, timeout=max(10.0, settings.llm_timeout_sec))
+            except asyncio.TimeoutError:
+                await send_event(websocket, send_lock, "warning", session_id=state.session_id, error="timed out waiting for final STT results")
+            stop_event.set()
+            keepalive_task.cancel()
         else:
             tasks = [
                 asyncio.create_task(browser_to_deepgram(websocket, stt_ws, stop_event)),
                 asyncio.create_task(deepgram_to_browser(websocket, send_lock, stt_ws, state, settings, stop_event)),
                 asyncio.create_task(keepalive_loop(stt_ws, settings, stop_event)),
             ]
-
-        done, pending = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
-        for task in done:
-            if task.cancelled():
-                continue
-            exc = task.exception()
-            if exc is not None and not isinstance(exc, WebSocketDisconnect):
-                await send_event(websocket, send_lock, "error", session_id=state.session_id, error=str(exc))
-
-        stop_event.set()
-        for task in pending:
-            task.cancel()
+            done, pending = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
+            for task in done:
+                if task.cancelled():
+                    continue
+                exc = task.exception()
+                if exc is not None and not isinstance(exc, WebSocketDisconnect):
+                    await send_event(websocket, send_lock, "error", session_id=state.session_id, error=str(exc))
+            stop_event.set()
+            for task in pending:
+                task.cancel()
 
         await maybe_schedule_analysis(websocket, send_lock, state, settings, force=True)
         if state.analysis_task:
