@@ -19,9 +19,10 @@ http://127.0.0.1:8030/realtime
 Backend endpoints:
 
 ```text
-GET /realtime
-GET /realtime/status
-WS  /ws/realtime
+GET  /realtime
+GET  /realtime/status
+POST /realtime/uploads
+WS   /ws/realtime
 ```
 
 ## Required environment
@@ -34,6 +35,12 @@ GROQ_API_KEY=gsk_...
 ```
 
 `PROVIDER_DEEPGRAM_API_KEY`, `LIVE_DEEPGRAM_API_KEY`, `PROVIDER_GROQ_API_KEY`, and `LIVE_LLM_API_KEY` are also accepted as fallbacks.
+
+The realtime Deepgram client needs the Python `websockets` package:
+
+```bash
+pip install websockets==14.1
+```
 
 ## Recommended realtime defaults
 
@@ -69,13 +76,25 @@ LIVE_LLM_CONTEXT_CHARS=6000
 LIVE_LLM_STRICT_SCHEMA=true
 ```
 
+## Uploaded class file flow
+
+The `/realtime` panel can now process a recorded class file as if it were being played live:
+
+1. Select **فایل آپلودشده**.
+2. Pick an audio/video file.
+3. Click **آپلود فایل**.
+4. Click **شروع**.
+
+The backend uses the existing media pipeline to save the upload, extract audio with ffmpeg, probe duration with ffprobe, and store a temporary upload session. When playback starts, it streams raw `linear16` audio to Deepgram at realtime speed, so `transcript.partial`, `transcript.final`, and `teacher.hint` arrive progressively.
+
 ## WebSocket protocol
 
-The first client message should be JSON:
+For microphone-style clients, the first client message should be JSON:
 
 ```json
 {
   "type": "start",
+  "source": "mic",
   "language": "fa",
   "topic": "calculus derivatives",
   "keyterms": "مشتق, حد, شیب",
@@ -93,6 +112,35 @@ transcript.final
 teacher.hint
 analysis.error
 session.closed
+```
+
+For uploaded-file playback, first upload the file:
+
+```text
+POST /realtime/uploads
+multipart/form-data: file=<audio-or-video>
+```
+
+Then open the websocket with:
+
+```json
+{
+  "type": "start",
+  "source": "upload",
+  "upload_id": "<id from POST /realtime/uploads>",
+  "language": "fa",
+  "topic": "class topic",
+  "keyterms": "term1, term2",
+  "diarize": false
+}
+```
+
+The server emits extra upload playback events:
+
+```text
+file.playback.started
+file.playback.progress
+file.playback.finished
 ```
 
 `transcript.partial` is for UI captions. `transcript.final` is appended to the analysis buffer. `teacher.hint` contains the structured Groq JSON result for the teacher dashboard.
