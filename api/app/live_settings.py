@@ -89,6 +89,9 @@ class LiveSettings:
     llm_interval_sec: float = 18.0
     llm_context_chars: int = 6000
     llm_strict_schema: bool = True
+    issue_tracking_enabled: bool = True
+    issue_resolution_enabled: bool = True
+    issue_resolution_min_confidence: float = 0.68
 
     @classmethod
     def from_env(cls) -> "LiveSettings":
@@ -141,6 +144,9 @@ class LiveSettings:
             llm_interval_sec=env_float("LIVE_LLM_INTERVAL_SEC", 18.0),
             llm_context_chars=env_int("LIVE_LLM_CONTEXT_CHARS", 6000),
             llm_strict_schema=env_bool("LIVE_LLM_STRICT_SCHEMA", True),
+            issue_tracking_enabled=env_bool("LIVE_ISSUE_TRACKING_ENABLED", True),
+            issue_resolution_enabled=env_bool("LIVE_ISSUE_RESOLUTION_ENABLED", True),
+            issue_resolution_min_confidence=env_float("LIVE_ISSUE_RESOLUTION_MIN_CONFIDENCE", 0.68),
         )
 
     def public_dict(self) -> Dict[str, Any]:
@@ -173,6 +179,11 @@ class LiveSettings:
                 "min_chars": self.llm_min_chars,
                 "strict_schema": self.llm_strict_schema,
             },
+            "issue_tracking": {
+                "enabled": self.issue_tracking_enabled,
+                "resolution_enabled": self.issue_resolution_enabled,
+                "resolution_min_confidence": self.issue_resolution_min_confidence,
+            },
         }
 
 
@@ -191,12 +202,7 @@ def extract_client_options(message: Dict[str, Any], settings: LiveSettings) -> D
         keyterm_list = [str(x).strip() for x in keyterms if str(x).strip()]
     else:
         keyterm_list = []
-    return {
-        "language": language,
-        "topic": topic,
-        "keyterms": keyterm_list[:30],
-        "diarize": bool(message.get("diarize", settings.diarize)),
-    }
+    return {"language": language, "topic": topic, "keyterms": keyterm_list[:30], "diarize": bool(message.get("diarize", settings.diarize))}
 
 
 def build_deepgram_url(settings: LiveSettings, client_options: Dict[str, Any]) -> str:
@@ -216,12 +222,10 @@ def build_deepgram_url(settings: LiveSettings, client_options: Dict[str, Any]) -
         query["encoding"] = settings.encoding
     if settings.sample_rate > 0:
         query["sample_rate"] = settings.sample_rate
-
     keyterms = [*settings.keyterms, *client_options.get("keyterms", [])]
     if keyterms:
         query["keyterm"] = keyterms
     if settings.keywords:
         query["keywords"] = settings.keywords
-
     separator = "&" if "?" in settings.deepgram_base_url else "?"
     return settings.deepgram_base_url.rstrip("?&") + separator + urlencode(query, doseq=True)
