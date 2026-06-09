@@ -55,6 +55,7 @@ class LiveSessionState:
     final_chunks: List[TranscriptChunk] = field(default_factory=list)
     analyzed_index: int = 0
     last_analysis_at: float = 0.0
+    last_resolution_at: float = 0.0
     analysis_task: Optional[asyncio.Task] = None
     tracked_issues: Dict[str, TeacherIssue] = field(default_factory=dict)
 
@@ -209,14 +210,17 @@ def resolution_schema(strict: bool) -> Dict[str, Any]:
 def analysis_system_prompt() -> str:
     return (
         "You are a real-time classroom feedback assistant. "
-        "You observe a live Persian classroom transcript and help the teacher improve clarity. "
-        "Be conservative: only alert when the transcript gives clear evidence. "
+        "You observe a live Persian classroom transcript and help the teacher improve pedagogy, not grammar. "
+        "Be conservative: only alert when the transcript gives clear evidence of a teaching issue that affects student understanding. "
+        "Never alert for colloquial Persian, informal wording, orthography, half-space/spacing, punctuation, literary style, or making a sentence more formal. "
+        "Assume STT can be imperfect. Do not flag a teacher_slip for a single suspicious word unless it clearly changes the educational meaning. "
+        "Do not act as a copy editor or Persian writing corrector. "
         "Prefer short, actionable teacher hints in Persian. "
-        "Classify every hint with alert_category, severity_label, issue_type, and Persian tags. "
+        "Classify every real hint with alert_category, severity_label, issue_type, and Persian tags. "
         "For every actionable alert, write resolution_criteria: what must happen later in the lecture for this issue to be considered fixed. "
-        "Use wrong_statement or critical_correction only when there is clear evidence that the content is incorrect, not merely incomplete. "
-        "Use teacher_slip for obvious misspeaking, naming mistakes, number slips, or accidental wording that the teacher can quickly correct. "
-        "Do not criticize tone or personality. Focus on pedagogy: unclear definitions, missing examples, prerequisite gaps, sudden topic jumps, dense explanations, and good moments worth continuing. "
+        "Use wrong_statement or critical_correction only when there is clear evidence that the content is incorrect, not merely incomplete or possibly mis-transcribed. "
+        "Use teacher_slip only for obvious factual or conceptual slips, naming mistakes, number slips, or accidental wording that changes meaning. "
+        "Do not criticize tone, accent, fluency, everyday speech, or personality. Focus on pedagogy: unclear definitions, missing examples, prerequisite gaps, sudden topic jumps, dense explanations, and good moments worth continuing. "
         "Return only structured JSON matching the schema."
     )
 
@@ -232,18 +236,22 @@ def analysis_user_prompt(state: LiveSessionState, settings: LiveSettings, segmen
         "Latest segment to evaluate:\n"
         f"{segment}\n\n"
         "Classification guide:\n"
-        "- needs_example: explanation is probably okay but would benefit from a concrete example.\n"
+        "- needs_example: explanation is probably okay but would materially benefit from a concrete example.\n"
         "- unclear_explanation: explanation is vague, ambiguous, or hard to follow.\n"
         "- too_fast_or_dense: too many ideas or terms are compressed together.\n"
         "- wrong_statement: the transcript clearly says something factually or conceptually wrong.\n"
-        "- teacher_slip: likely misspeaking or a small verbal slip that should be corrected.\n"
+        "- teacher_slip: obvious factual/conceptual misspeaking that changes meaning, not informal wording or STT spelling.\n"
         "- prerequisite_gap: a required prior concept was used without explanation.\n"
         "- student_check_needed: teacher should ask a quick understanding question.\n"
         "- positive_feedback: the current explanation is clear and useful.\n\n"
+        "Do NOT alert for:\n"
+        "- colloquial Persian such as everyday suffixes or informal pronunciation.\n"
+        "- spelling, punctuation, half-space, grammar polishing, or replacing informal words with formal equivalents.\n"
+        "- a single word that may be an STT transcription error unless it clearly breaks the lesson meaning.\n\n"
         "Resolution criteria guide:\n"
         "- For needs_example, require a concrete relevant example.\n"
         "- For unclear_explanation, require a clearer rephrasing or step-by-step explanation.\n"
-        "- For wrong_statement or teacher_slip, require an explicit correction.\n"
+        "- For wrong_statement or meaningful teacher_slip, require an explicit correction.\n"
         "- For prerequisite_gap, require explaining the missing prerequisite.\n"
         "- For student_check_needed, require asking a check-for-understanding question.\n\n"
         "Decision rules:\n"
@@ -306,6 +314,22 @@ def extract_json_object(text: str) -> Dict[str, Any]:
     return {}
 
 
+def _looks_like_style_or_stt_noise(result: Dict[str, Any]) -> bool:
+    category = str(result.get("alert_category") or "")
+    issue_type = str(result.get("issue_type") or "")
+    severity = str(result.get("severity_label") or "")
+    if category not in {"teacher_slip", "wrong_statement"} and issue_type != "teacher_misspoke":
+        return False
+    text = " ".join(
+        str(result.get(key) or "")
+        for key in ("short_feedback", "suggested_teacher_action", "evidence", "resolution_criteria", "segment_summary")
+    )
+    noise_words = ["کلمه", "واژه", "املایی", "نگارشی", "نیم", "فاصله", "رسمی", "عامیانه", "محاوره", "نوشتار", "املاء", "تلفظ", "پانکچویشن", "punctuation", "grammar", "spelling"]
+    if any(word in text for word in noise_words):
+        return True
+    return severity == "suggestion" and issue_type == "teacher_misspoke" and not any(tag in text for tag in ["مفهوم", "تعریف", "فرمول", "عدد", "قانون", "نتیجه"])
+
+
 def _normalize_analysis_result(parsed: Dict[str, Any]) -> Dict[str, Any]:
     parsed.setdefault("should_alert_teacher", False)
     parsed.setdefault("alert_level", "none")
@@ -324,6 +348,14 @@ def _normalize_analysis_result(parsed: Dict[str, Any]) -> Dict[str, Any]:
     parsed.setdefault("evidence", "")
     parsed.setdefault("segment_summary", "")
     parsed.setdefault("resolution_criteria", "")
+    if _looks_like_style_or_stt_noise(parsed):
+        parsed["should_alert_teacher"] = False
+        parsed["alert_level"] = "none"
+        parsed["alert_category"] = "none"
+        parsed["severity_label"] = "none"
+        parsed["issue_type"] = "none"
+        parsed["tags"] = []
+        parsed["short_feedback"] = "این مورد احتمالاً سبک گفتار یا خطای STT است و هشدار آموزشی محسوب نمی‌شود."
     return parsed
 
 
@@ -436,41 +468,92 @@ async def _resolve_open_issues(websocket: WebSocket, send_lock: asyncio.Lock, st
             await send_event(websocket, send_lock, "teacher.issue.updated", session_id=state.session_id, issue=issue.public_dict())
 
 
-async def run_analysis_task(websocket: WebSocket, send_lock: asyncio.Lock, state: LiveSessionState, settings: LiveSettings, segment: str, from_index: int, to_index: int) -> None:
-    await send_event(websocket, send_lock, "analysis.started", session_id=state.session_id, from_index=from_index, to_index=to_index)
+async def run_analysis_task(
+    websocket: WebSocket,
+    send_lock: asyncio.Lock,
+    state: LiveSessionState,
+    settings: LiveSettings,
+    segment: str,
+    from_index: int,
+    to_index: int,
+    *,
+    include_feedback: bool = True,
+    include_resolution: bool = True,
+) -> None:
+    await send_event(websocket, send_lock, "analysis.started", session_id=state.session_id, from_index=from_index, to_index=to_index, include_feedback=include_feedback, include_resolution=include_resolution)
     try:
         if settings.llm_provider != "groq":
             raise HTTPException(status_code=400, detail=f"unsupported live LLM provider: {settings.llm_provider}")
-        await _resolve_open_issues(websocket, send_lock, state, settings, segment)
-        result = await call_groq_analysis(settings, state, segment)
-        if settings.issue_tracking_enabled and _is_trackable_issue(result):
-            issue = _create_issue_from_result(result, from_index, to_index)
-            state.tracked_issues[issue.issue_id] = issue
-            result["issue_id"] = issue.issue_id
-            result["issue_status"] = issue.status
-            result["resolution_criteria"] = issue.resolution_criteria
-            await send_event(websocket, send_lock, "teacher.issue.created", session_id=state.session_id, issue=issue.public_dict())
-        await send_event(websocket, send_lock, "teacher.hint", session_id=state.session_id, from_index=from_index, to_index=to_index, result=result)
+        if include_resolution:
+            await _resolve_open_issues(websocket, send_lock, state, settings, segment)
+        if include_feedback:
+            result = await call_groq_analysis(settings, state, segment)
+            if settings.issue_tracking_enabled and _is_trackable_issue(result):
+                issue = _create_issue_from_result(result, from_index, to_index)
+                state.tracked_issues[issue.issue_id] = issue
+                result["issue_id"] = issue.issue_id
+                result["issue_status"] = issue.status
+                result["resolution_criteria"] = issue.resolution_criteria
+                await send_event(websocket, send_lock, "teacher.issue.created", session_id=state.session_id, issue=issue.public_dict())
+            if result.get("should_alert_teacher"):
+                await send_event(websocket, send_lock, "teacher.hint", session_id=state.session_id, from_index=from_index, to_index=to_index, result=result)
+            else:
+                await send_event(websocket, send_lock, "teacher.no_issue", session_id=state.session_id, from_index=from_index, to_index=to_index, result=result)
     except Exception as exc:
         detail = exc.detail if isinstance(exc, HTTPException) else str(exc)
         await send_event(websocket, send_lock, "analysis.error", session_id=state.session_id, error=str(detail))
 
 
-async def maybe_schedule_analysis(websocket: WebSocket, send_lock: asyncio.Lock, state: LiveSessionState, settings: LiveSettings, *, force: bool = False) -> None:
+def _analysis_interval(settings: LiveSettings) -> float:
+    return float(getattr(settings, "analysis_interval_sec", getattr(settings, "llm_interval_sec", 180.0)) or 180.0)
+
+
+def _resolution_interval(settings: LiveSettings) -> float:
+    return float(getattr(settings, "issue_resolution_interval_sec", 300.0) or 300.0)
+
+
+async def maybe_schedule_analysis(
+    websocket: WebSocket,
+    send_lock: asyncio.Lock,
+    state: LiveSessionState,
+    settings: LiveSettings,
+    *,
+    force: bool = False,
+    resolve_only: bool = False,
+) -> None:
     if not settings.llm_enabled:
         return
     if state.analysis_task and not state.analysis_task.done():
         return
+    now = time.time()
     pending = state.pending_text()
+    context = state.context_text(settings.llm_context_chars)
+    if resolve_only:
+        if not context or not state.open_issues():
+            return
+        enough_time = (now - state.last_resolution_at) >= _resolution_interval(settings)
+        if not force and not enough_time:
+            return
+        state.last_resolution_at = now
+        state.analysis_task = asyncio.create_task(
+            run_analysis_task(websocket, send_lock, state, settings, context, state.analyzed_index, len(state.final_chunks), include_feedback=False, include_resolution=True)
+        )
+        return
+    if not pending and force:
+        pending = context
     if not pending:
         return
-    now = time.time()
     enough_chars = len(pending) >= settings.llm_min_chars
-    enough_time = (now - state.last_analysis_at) >= settings.llm_interval_sec
+    enough_time = (now - state.last_analysis_at) >= _analysis_interval(settings)
     if not force and not (enough_chars and enough_time):
         return
     from_index = state.analyzed_index
     to_index = len(state.final_chunks)
     state.analyzed_index = to_index
     state.last_analysis_at = now
-    state.analysis_task = asyncio.create_task(run_analysis_task(websocket, send_lock, state, settings, pending, from_index, to_index))
+    include_resolution = force or ((now - state.last_resolution_at) >= _resolution_interval(settings))
+    if include_resolution:
+        state.last_resolution_at = now
+    state.analysis_task = asyncio.create_task(
+        run_analysis_task(websocket, send_lock, state, settings, pending, from_index, to_index, include_feedback=True, include_resolution=include_resolution)
+    )
