@@ -1,0 +1,48 @@
+<!doctype html>
+<html lang="fa" dir="rtl">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Tootak Realtime Classroom</title>
+  <link rel="stylesheet" href="/ui-assets/realtime.css" />
+</head>
+<body>
+  <main class="shell">
+    <section class="hero card">
+      <div>
+        <p class="eyebrow">Tootak · Realtime</p>
+        <h1>کلاس زنده: تبدیل گفتار به متن و بازخورد آموزشی</h1>
+        <p class="muted">این صفحه برای نمایش زیرنویس زنده و هشدارهای کوتاه مخصوص استاد ساخته شده است.</p>
+      </div>
+      <div class="status-pill" id="statusPill">در حال بررسی...</div>
+    </section>
+
+    <section class="grid">
+      <form id="controlForm" class="card stack">
+        <h2>تنظیمات جلسه</h2>
+        <label><span>زبان</span><select id="language"><option value="fa">فارسی</option><option value="en">English</option><option value="">Auto</option></select></label>
+        <label><span>موضوع درس</span><input id="topic" placeholder="مثلاً مشتق، تاریخ ایران، مدار منطقی..." /></label>
+        <label><span>اصطلاحات کلیدی</span><input id="keyterms" placeholder="با ویرگول جدا کن" /></label>
+        <label class="check"><input id="diarize" type="checkbox" /><span>تشخیص گوینده‌ها</span></label>
+        <div class="actions"><button id="startBtn" type="submit">شروع</button><button id="stopBtn" type="button" disabled>توقف</button></div>
+        <pre id="runtimeStatus" class="mini"></pre>
+      </form>
+
+      <section class="card stack">
+        <h2>هشدارهای استاد</h2>
+        <div id="hints" class="hints"><p class="muted">هنوز بازخوردی تولید نشده است.</p></div>
+      </section>
+    </section>
+
+    <section class="card stack">
+      <h2>زیرنویس زنده</h2>
+      <div id="partial" class="partial">...</div>
+      <h3>متن نهایی‌شده</h3>
+      <pre id="finalText" class="transcript"></pre>
+    </section>
+
+    <section class="card stack"><h2>Event log</h2><pre id="events" class="events"></pre></section>
+  </main>
+  <script src="/ui-assets/realtime.js"></script>
+</body>
+</html>
