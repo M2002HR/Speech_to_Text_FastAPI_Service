@@ -2,20 +2,136 @@ from __future__ import annotations
 
 import asyncio
 import json
+import time
 import uuid
+from dataclasses import replace
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
-from fastapi import APIRouter, Request, WebSocket, WebSocketDisconnect
+from fastapi import APIRouter, File, HTTPException, Request, UploadFile, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse
 
 from .live_analysis import LiveSessionState, maybe_schedule_analysis, send_event
 from .live_settings import LiveSettings, build_deepgram_url, extract_client_options
 from .live_stt import browser_to_deepgram, connect_deepgram, deepgram_to_browser, keepalive_loop
+from .services import is_audio_file, is_video_file, sanitize_name
 
 _UI_DIR = Path(__file__).resolve().parent / "ui"
+_REALTIME_UPLOAD_TTL_SEC = 6 * 60 * 60
 
 router = APIRouter(tags=["realtime"])
+
+
+def _upload_store(request: Request) -> Dict[str, Dict[str, Any]]:
+    store = getattr(request.app.state, "realtime_uploads", None)
+    if not isinstance(store, dict):
+        store = {}
+        request.app.state.realtime_uploads = store
+    return store
+
+
+def _cleanup_upload_store(store: Dict[str, Dict[str, Any]]) -> None:
+    now = time.time()
+    expired: List[str] = []
+    for upload_id, item in store.items():
+        if now - float(item.get("created_at", now)) <= _REALTIME_UPLOAD_TTL_SEC:
+            continue
+        expired.append(upload_id)
+    for upload_id in expired:
+        item = store.pop(upload_id, {})
+        for key in ("raw_path", "prepared_path"):
+            try:
+                path = Path(str(item.get(key) or ""))
+                if path.exists():
+                    path.unlink(missing_ok=True)
+            except Exception:
+                pass
+
+
+def _get_upload_session(websocket: WebSocket, upload_id: str) -> Dict[str, Any]:
+    store = getattr(websocket.app.state, "realtime_uploads", {})
+    if not isinstance(store, dict) or upload_id not in store:
+        raise HTTPException(status_code=404, detail="realtime upload not found or expired")
+    return store[upload_id]
+
+
+def _file_stream_settings(settings: LiveSettings) -> LiveSettings:
+    return replace(settings, encoding="linear16", sample_rate=16000, channels=1)
+
+
+async def _file_to_deepgram(
+    websocket: WebSocket,
+    send_lock: asyncio.Lock,
+    deepgram_ws: Any,
+    state: LiveSessionState,
+    settings: LiveSettings,
+    audio_path: Path,
+    stop_event: asyncio.Event,
+    *,
+    chunk_ms: int = 250,
+) -> None:
+    app_settings = websocket.app.state.settings
+    ffmpeg_binary = app_settings.processing.ffmpeg_binary
+    sample_rate = 16000
+    channels = 1
+    bytes_per_second = sample_rate * channels * 2
+    chunk_size = max(640, int(bytes_per_second * max(40, chunk_ms) / 1000))
+    if chunk_size % 2:
+        chunk_size += 1
+
+    proc = await asyncio.create_subprocess_exec(
+        ffmpeg_binary,
+        "-v",
+        "error",
+        "-i",
+        str(audio_path),
+        "-vn",
+        "-f",
+        "s16le",
+        "-acodec",
+        "pcm_s16le",
+        "-ar",
+        str(sample_rate),
+        "-ac",
+        str(channels),
+        "pipe:1",
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+    )
+
+    started = time.monotonic()
+    sent_bytes = 0
+    await send_event(websocket, send_lock, "file.playback.started", session_id=state.session_id)
+    try:
+        assert proc.stdout is not None
+        while not stop_event.is_set():
+            chunk = await proc.stdout.read(chunk_size)
+            if not chunk:
+                break
+            await deepgram_ws.send(chunk)
+            sent_bytes += len(chunk)
+            audio_elapsed = sent_bytes / float(bytes_per_second)
+            wall_elapsed = time.monotonic() - started
+            if audio_elapsed > wall_elapsed:
+                await asyncio.sleep(min(1.0, audio_elapsed - wall_elapsed))
+            if sent_bytes % (bytes_per_second * 5) < chunk_size:
+                await send_event(
+                    websocket,
+                    send_lock,
+                    "file.playback.progress",
+                    session_id=state.session_id,
+                    audio_seconds=round(audio_elapsed, 2),
+                )
+        await deepgram_ws.send(json.dumps({"type": "CloseStream"}))
+    finally:
+        stop_event.set()
+        if proc.returncode is None:
+            proc.terminate()
+            try:
+                await asyncio.wait_for(proc.wait(), timeout=2.0)
+            except asyncio.TimeoutError:
+                proc.kill()
+        await send_event(websocket, send_lock, "file.playback.finished", session_id=state.session_id)
 
 
 @router.get("/realtime", include_in_schema=False, summary="Realtime classroom STT panel")
@@ -31,6 +147,44 @@ async def realtime_status(request: Request) -> Dict[str, Any]:
         "status": "ok",
         "app": app_settings.app.name if app_settings else "Tootak",
         "realtime": settings.public_dict(),
+    }
+
+
+@router.post("/realtime/uploads", summary="Upload audio/video for simulated realtime playback")
+async def realtime_upload(request: Request, file: UploadFile = File(...)) -> Dict[str, Any]:
+    source_name = file.filename or "uploaded-media"
+    content_type = file.content_type
+    if not (is_audio_file(source_name, content_type) or is_video_file(source_name, content_type)):
+        raise HTTPException(status_code=415, detail="upload an audio or video file")
+
+    media = request.app.state.services.transcription.media
+    raw_path = await media.save_upload(file)
+    prepared_path: Optional[Path] = None
+    try:
+        prepared_path = await media.extract_audio(raw_path, source_name, content_type)
+        duration = await media.probe_duration(prepared_path)
+    except Exception:
+        if raw_path.exists():
+            raw_path.unlink(missing_ok=True)
+        raise
+
+    store = _upload_store(request)
+    _cleanup_upload_store(store)
+    upload_id = uuid.uuid4().hex
+    store[upload_id] = {
+        "upload_id": upload_id,
+        "source_filename": sanitize_name(source_name),
+        "source_content_type": content_type,
+        "raw_path": str(raw_path),
+        "prepared_path": str(prepared_path),
+        "duration_seconds": duration,
+        "created_at": time.time(),
+    }
+    return {
+        "upload_id": upload_id,
+        "source_filename": source_name,
+        "duration_seconds": duration,
+        "prepared_audio_path": str(prepared_path),
     }
 
 
@@ -66,6 +220,13 @@ async def realtime_ws(websocket: WebSocket) -> None:
     except json.JSONDecodeError:
         initial_payload = {}
 
+    source = str(initial_payload.get("source") or "mic").strip().lower()
+    upload_session: Optional[Dict[str, Any]] = None
+    if source == "upload":
+        upload_id = str(initial_payload.get("upload_id") or "").strip()
+        upload_session = _get_upload_session(websocket, upload_id)
+        settings = _file_stream_settings(settings)
+
     client_options = extract_client_options(initial_payload, settings)
     state.topic = str(client_options.get("topic") or "")
     deepgram_url = build_deepgram_url(settings, client_options)
@@ -75,6 +236,12 @@ async def realtime_ws(websocket: WebSocket) -> None:
         send_lock,
         "session.started",
         session_id=state.session_id,
+        source=source,
+        upload={
+            "upload_id": upload_session.get("upload_id"),
+            "filename": upload_session.get("source_filename"),
+            "duration_seconds": upload_session.get("duration_seconds"),
+        } if upload_session else None,
         stt={
             "model": settings.deepgram_model,
             "language": client_options.get("language") or settings.language,
@@ -95,11 +262,28 @@ async def realtime_ws(websocket: WebSocket) -> None:
         stt_ws = await connect_deepgram(deepgram_url, settings.deepgram_api_key)
         await send_event(websocket, send_lock, "stt.open", session_id=state.session_id)
 
-        tasks = [
-            asyncio.create_task(browser_to_deepgram(websocket, stt_ws, stop_event)),
-            asyncio.create_task(deepgram_to_browser(websocket, send_lock, stt_ws, state, settings, stop_event)),
-            asyncio.create_task(keepalive_loop(stt_ws, settings, stop_event)),
-        ]
+        if source == "upload" and upload_session:
+            tasks = [
+                asyncio.create_task(
+                    _file_to_deepgram(
+                        websocket,
+                        send_lock,
+                        stt_ws,
+                        state,
+                        settings,
+                        Path(str(upload_session["prepared_path"])),
+                        stop_event,
+                    )
+                ),
+                asyncio.create_task(deepgram_to_browser(websocket, send_lock, stt_ws, state, settings, stop_event)),
+                asyncio.create_task(keepalive_loop(stt_ws, settings, stop_event)),
+            ]
+        else:
+            tasks = [
+                asyncio.create_task(browser_to_deepgram(websocket, stt_ws, stop_event)),
+                asyncio.create_task(deepgram_to_browser(websocket, send_lock, stt_ws, state, settings, stop_event)),
+                asyncio.create_task(keepalive_loop(stt_ws, settings, stop_event)),
+            ]
 
         done, pending = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
         for task in done:
