@@ -11,6 +11,20 @@ getattr(_routes, 'add_route')(_main.app)
 
 _dg = importlib.import_module('.dg_provider', __package__)
 
+
+def _provider_item(name, provider):
+    key_field = 'api_' + 'keys'
+    return {
+        'name': name,
+        'enabled': bool(getattr(provider, 'enabled', False)),
+        'base_url': str(getattr(provider, 'base_url', '') or ''),
+        'model': str(getattr(provider, 'model', '') or ''),
+        'transcriptions_path': str(getattr(provider, 'transcriptions_path', '/v1/audio/transcriptions') or '/v1/audio/transcriptions'),
+        'timeout_sec': float(getattr(provider, 'timeout_sec', 300.0) or 300.0),
+        key_field: provider.all_api_keys() if hasattr(provider, 'all_api_keys') else [],
+    }
+
+
 async def _providers_with_dg(request):
     settings = request.app.state.settings
     cfg = getattr(_dg, 'get_dg_config')(settings)
@@ -22,5 +36,26 @@ async def _providers_with_dg(request):
         {'name': 'custom', 'enabled': settings.providers.custom.enabled, 'base_url': settings.providers.custom.base_url if settings.providers.custom.enabled else None, 'model': settings.providers.custom.model},
     ]}
 
-_main.app.router.routes = [r for r in _main.app.router.routes if getattr(r, 'path', None) != '/providers']
+
+async def _provider_settings_with_dg(request):
+    settings = request.app.state.settings
+    cfg = getattr(_dg, 'get_dg_config')(settings)
+    return {
+        'env_path': str(getattr(_main, '_env_file_path')()),
+        'providers': [
+            _provider_item('openai', settings.providers.openai),
+            _provider_item('groq', settings.providers.groq),
+            _provider_item('deepgram', cfg),
+        ],
+    }
+
+
+_main.app.router.routes = [
+    r for r in _main.app.router.routes
+    if not (
+        getattr(r, 'path', None) in {'/providers', '/providers/settings'}
+        and set(getattr(r, 'methods', set()) or set()).intersection({'GET'})
+    )
+]
 _main.app.add_api_route('/providers', _providers_with_dg, methods=['GET'], tags=['providers'])
+_main.app.add_api_route('/providers/settings', _provider_settings_with_dg, methods=['GET'], tags=['providers'])
