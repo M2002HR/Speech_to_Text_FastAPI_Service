@@ -104,7 +104,10 @@ class LiveSettings:
     keepalive_sec: float = 5.0
     open_timeout_sec: float = 45.0
     close_timeout_sec: float = 10.0
-    ping_interval_sec: float = 20.0
+    # 0 (or negative) disables the websockets client keepalive ping. Deepgram
+    # does not answer protocol-level pings, so this stays off by default and
+    # the app-level KeepAlive loop keeps the stream open instead.
+    ping_interval_sec: float = 0.0
     ping_timeout_sec: float = 20.0
     connect_retries: int = 2
     connect_retry_backoff_sec: float = 2.0
@@ -152,7 +155,7 @@ class LiveSettings:
             keepalive_sec=env_float("LIVE_DEEPGRAM_KEEPALIVE_SEC", 5.0),
             open_timeout_sec=env_float("LIVE_DEEPGRAM_OPEN_TIMEOUT_SEC", 45.0),
             close_timeout_sec=env_float("LIVE_DEEPGRAM_CLOSE_TIMEOUT_SEC", 10.0),
-            ping_interval_sec=env_float("LIVE_DEEPGRAM_PING_INTERVAL_SEC", 20.0),
+            ping_interval_sec=env_float("LIVE_DEEPGRAM_PING_INTERVAL_SEC", 0.0),
             ping_timeout_sec=env_float("LIVE_DEEPGRAM_PING_TIMEOUT_SEC", 20.0),
             connect_retries=env_int("LIVE_DEEPGRAM_CONNECT_RETRIES", 2),
             connect_retry_backoff_sec=env_float("LIVE_DEEPGRAM_CONNECT_RETRY_BACKOFF_SEC", 2.0),

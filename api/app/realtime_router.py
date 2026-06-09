@@ -13,7 +13,7 @@ from typing import Any, Dict, List, Optional
 from fastapi import APIRouter, File, HTTPException, Request, UploadFile, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse
 
-from .live_analysis import LiveSessionState, maybe_schedule_analysis, send_event
+from .live_analysis import BrowserSender, LiveSessionState, maybe_schedule_analysis, send_event
 from .live_settings import LiveSettings, build_deepgram_url, extract_client_options
 from .live_stt import browser_to_deepgram, connect_deepgram, deepgram_to_browser, keepalive_loop
 from .services import is_audio_file, is_video_file, sanitize_name
@@ -102,7 +102,7 @@ def _start_ffmpeg_raw_pcm(ffmpeg_binary: str, audio_path: Path) -> subprocess.Po
 
 async def _file_to_deepgram(
     websocket: WebSocket,
-    send_lock: asyncio.Lock,
+    sender: "BrowserSender",
     deepgram_ws: Any,
     state: LiveSessionState,
     settings: LiveSettings,
@@ -124,11 +124,20 @@ async def _file_to_deepgram(
         raise FileNotFoundError(f"prepared audio file not found: {audio_path}")
 
     proc = await asyncio.to_thread(_start_ffmpeg_raw_pcm, ffmpeg_binary, audio_path)
+    # Drain ffmpeg's stderr concurrently. We pace stdout reads to ~1x realtime,
+    # so ffmpeg blocks on its stdout pipe almost immediately; if it also tries to
+    # write more than ~64KB to an unread stderr pipe it would deadlock and stop
+    # producing audio, starving Deepgram into a net0001 disconnect. Reading
+    # stderr to EOF in a background thread guarantees that can never happen for
+    # arbitrary uploaded media.
+    stderr_future: Optional["asyncio.Future[bytes]"] = (
+        asyncio.ensure_future(asyncio.to_thread(proc.stderr.read)) if proc.stderr is not None else None
+    )
     sent_bytes = 0
     started = time.monotonic()
     await send_event(
         websocket,
-        send_lock,
+        sender,
         "file.playback.started",
         session_id=state.session_id,
         path=str(audio_path),
@@ -139,46 +148,85 @@ async def _file_to_deepgram(
         if proc.stdout is None:
             raise RuntimeError("ffmpeg stdout pipe was not created")
 
+        read = proc.stdout.read1 if hasattr(proc.stdout, "read1") else proc.stdout.read
+        slow_read_total = 0.0
+        slow_send_total = 0.0
+        slow_events = 0
+        last_progress_mark = 0
+
         while not stop_event.is_set():
-            chunk = await asyncio.to_thread(proc.stdout.read, chunk_size)
+            # read1() returns whatever is already buffered (up to chunk_size)
+            # without waiting for a full chunk, so audio keeps flowing to
+            # Deepgram continuously instead of in stop-start bursts.
+            t_read = time.monotonic()
+            chunk = await asyncio.to_thread(read, chunk_size)
+            read_ms = (time.monotonic() - t_read) * 1000.0
             if not chunk:
                 break
 
+            t_send = time.monotonic()
             await deepgram_ws.send(chunk)
+            send_ms = (time.monotonic() - t_send) * 1000.0
+
+            # Surface where time is actually going: a slow read means ffmpeg is
+            # the bottleneck, a slow send means the Deepgram network link is.
+            if read_ms > 1500.0 or send_ms > 1500.0:
+                slow_events += 1
+                slow_read_total += read_ms
+                slow_send_total += send_ms
+                await send_event(
+                    websocket,
+                    sender,
+                    "file.playback.slow",
+                    session_id=state.session_id,
+                    read_ms=round(read_ms, 1),
+                    send_ms=round(send_ms, 1),
+                    bottleneck="deepgram_send" if send_ms >= read_ms else "ffmpeg_read",
+                )
+
             sent_bytes += len(chunk)
             audio_elapsed = sent_bytes / float(bytes_per_second)
             wall_elapsed = time.monotonic() - started
             if audio_elapsed > wall_elapsed:
                 await asyncio.sleep(min(1.0, audio_elapsed - wall_elapsed))
-            if sent_bytes % (bytes_per_second * 5) < chunk_size:
+            progress_mark = sent_bytes // (bytes_per_second * 5)
+            if progress_mark != last_progress_mark:
+                last_progress_mark = progress_mark
                 await send_event(
                     websocket,
-                    send_lock,
+                    sender,
                     "file.playback.progress",
                     session_id=state.session_id,
                     audio_seconds=round(audio_elapsed, 2),
+                    wall_seconds=round(wall_elapsed, 2),
                     sent_bytes=sent_bytes,
+                    slow_events=slow_events,
+                    slow_read_ms=round(slow_read_total, 1),
+                    slow_send_ms=round(slow_send_total, 1),
                 )
 
         return_code = await asyncio.to_thread(proc.wait)
         if return_code != 0 or sent_bytes == 0:
             stderr = b""
-            if proc.stderr is not None:
-                stderr = await asyncio.to_thread(proc.stderr.read)
+            if stderr_future is not None:
+                try:
+                    stderr = await asyncio.wait_for(asyncio.shield(stderr_future), timeout=2.0)
+                except Exception:
+                    stderr = b""
             detail = stderr.decode("utf-8", errors="replace")[:1200]
             raise RuntimeError(f"ffmpeg realtime decode failed rc={return_code}; sent_bytes={sent_bytes}; stderr={detail}")
 
         await deepgram_ws.send(json.dumps({"type": "CloseStream"}))
         await send_event(
             websocket,
-            send_lock,
+            sender,
             "file.playback.finished",
             session_id=state.session_id,
             audio_seconds=round(sent_bytes / float(bytes_per_second), 2),
             sent_bytes=sent_bytes,
         )
     except Exception as exc:
-        await send_event(websocket, send_lock, "file.playback.error", session_id=state.session_id, **_exception_payload(exc))
+        await send_event(websocket, sender, "file.playback.error", session_id=state.session_id, **_exception_payload(exc))
         raise
     finally:
         if proc.poll() is None:
@@ -187,6 +235,8 @@ async def _file_to_deepgram(
                 await asyncio.wait_for(asyncio.to_thread(proc.wait), timeout=2.0)
             except asyncio.TimeoutError:
                 proc.kill()
+        if stderr_future is not None and not stderr_future.done():
+            stderr_future.cancel()
 
 
 @router.get("/realtime", include_in_schema=False, summary="Realtime classroom STT panel")
@@ -247,23 +297,26 @@ async def realtime_upload(request: Request, file: UploadFile = File(...)) -> Dic
 async def realtime_ws(websocket: WebSocket) -> None:
     settings = LiveSettings.from_env()
     await websocket.accept()
-    send_lock = asyncio.Lock()
+    sender = BrowserSender(websocket)
+    sender.start()
     state = LiveSessionState(session_id=uuid.uuid4().hex)
     stop_event = asyncio.Event()
 
     if not settings.enabled:
-        await send_event(websocket, send_lock, "error", session_id=state.session_id, error="realtime mode is disabled")
+        await send_event(websocket, sender, "error", session_id=state.session_id, error="realtime mode is disabled")
+        await sender.aclose()
         await websocket.close(code=1013)
         return
 
     if not settings.deepgram_api_key:
         await send_event(
             websocket,
-            send_lock,
+            sender,
             "error",
             session_id=state.session_id,
             error="DEEPGRAM_API_KEY or PROVIDER_DEEPGRAM_API_KEY is not configured",
         )
+        await sender.aclose()
         await websocket.close(code=1011)
         return
 
@@ -288,7 +341,7 @@ async def realtime_ws(websocket: WebSocket) -> None:
 
     await send_event(
         websocket,
-        send_lock,
+        sender,
         "session.started",
         session_id=state.session_id,
         source=source,
@@ -316,13 +369,13 @@ async def realtime_ws(websocket: WebSocket) -> None:
     tasks: List[asyncio.Task[Any]] = []
     try:
         stt_ws = await connect_deepgram(deepgram_url, settings.deepgram_api_key)
-        await send_event(websocket, send_lock, "stt.open", session_id=state.session_id)
+        await send_event(websocket, sender, "stt.open", session_id=state.session_id)
 
         if source == "upload" and upload_session:
             sender_task = asyncio.create_task(
                 _file_to_deepgram(
                     websocket,
-                    send_lock,
+                    sender,
                     stt_ws,
                     state,
                     settings,
@@ -330,7 +383,7 @@ async def realtime_ws(websocket: WebSocket) -> None:
                     stop_event,
                 )
             )
-            receiver_task = asyncio.create_task(deepgram_to_browser(websocket, send_lock, stt_ws, state, settings, stop_event))
+            receiver_task = asyncio.create_task(deepgram_to_browser(websocket, sender, stt_ws, state, settings, stop_event))
             keepalive_task = asyncio.create_task(keepalive_loop(stt_ws, settings, stop_event))
             tasks = [sender_task, receiver_task, keepalive_task]
 
@@ -338,13 +391,13 @@ async def realtime_ws(websocket: WebSocket) -> None:
             try:
                 await asyncio.wait_for(receiver_task, timeout=max(10.0, settings.llm_timeout_sec))
             except asyncio.TimeoutError:
-                await send_event(websocket, send_lock, "warning", session_id=state.session_id, error="timed out waiting for final STT results")
+                await send_event(websocket, sender, "warning", session_id=state.session_id, error="timed out waiting for final STT results")
             stop_event.set()
             keepalive_task.cancel()
         else:
             tasks = [
                 asyncio.create_task(browser_to_deepgram(websocket, stt_ws, stop_event)),
-                asyncio.create_task(deepgram_to_browser(websocket, send_lock, stt_ws, state, settings, stop_event)),
+                asyncio.create_task(deepgram_to_browser(websocket, sender, stt_ws, state, settings, stop_event)),
                 asyncio.create_task(keepalive_loop(stt_ws, settings, stop_event)),
             ]
             done, pending = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
@@ -353,20 +406,20 @@ async def realtime_ws(websocket: WebSocket) -> None:
                     continue
                 exc = task.exception()
                 if exc is not None and not isinstance(exc, WebSocketDisconnect):
-                    await send_event(websocket, send_lock, "error", session_id=state.session_id, **_exception_payload(exc))
+                    await send_event(websocket, sender, "error", session_id=state.session_id, **_exception_payload(exc))
             stop_event.set()
             for task in pending:
                 task.cancel()
 
-        await maybe_schedule_analysis(websocket, send_lock, state, settings, force=True)
+        await maybe_schedule_analysis(websocket, sender, state, settings, force=True)
         if state.analysis_task:
             try:
                 await asyncio.wait_for(state.analysis_task, timeout=settings.llm_timeout_sec + 5.0)
             except Exception as exc:
-                await send_event(websocket, send_lock, "analysis.error", session_id=state.session_id, **_exception_payload(exc))
+                await send_event(websocket, sender, "analysis.error", session_id=state.session_id, **_exception_payload(exc))
 
     except Exception as exc:
-        await send_event(websocket, send_lock, "error", session_id=state.session_id, **_exception_payload(exc))
+        await send_event(websocket, sender, "error", session_id=state.session_id, **_exception_payload(exc))
 
     finally:
         stop_event.set()
@@ -383,11 +436,12 @@ async def realtime_ws(websocket: WebSocket) -> None:
         try:
             await send_event(
                 websocket,
-                send_lock,
+                sender,
                 "session.closed",
                 session_id=state.session_id,
                 final_text=state.final_text(),
             )
+            await sender.aclose()
             await websocket.close()
         except Exception:
             pass

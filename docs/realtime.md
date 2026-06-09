@@ -4,10 +4,17 @@ This branch adds a production-oriented realtime path next to the existing file/j
 
 ## Run
 
-Use the ASGI entrypoint that includes the existing FastAPI app plus the realtime router:
+The unified launcher starts everything (file API + `/live` + `/realtime`):
 
 ```bash
-uvicorn api.app.asgi:app --host 0.0.0.0 --port 8030 --reload
+./scripts/start.sh          # Linux/macOS
+.\scripts\start.ps1         # Windows
+```
+
+Or run the unified ASGI entrypoint directly (file API + realtime router + live):
+
+```bash
+uvicorn api.app.server:app --host 0.0.0.0 --port 8030 --reload
 ```
 
 Open:

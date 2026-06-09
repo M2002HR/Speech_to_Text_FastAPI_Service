@@ -72,10 +72,117 @@ class LiveSessionState:
         return [issue for issue in self.tracked_issues.values() if issue.status in {"open", "probably_addressed"}]
 
 
-async def send_event(websocket: WebSocket, send_lock: asyncio.Lock, event_type: str, **payload: Any) -> None:
+# Event types that are high-frequency and disposable: losing one under
+# backpressure is harmless because a newer one supersedes it. Everything else
+# (finals, lifecycle, errors, teacher/analysis events) must never be dropped.
+_DROPPABLE_EVENTS = frozenset(
+    {
+        "transcript.partial",
+        "file.playback.progress",
+        "speech.started",
+        "deepgram.raw",
+        "stt.metadata",
+    }
+)
+
+_BROWSER_SENDER_SENTINEL = object()
+
+
+class BrowserSender:
+    """Decouples browser websocket writes from the audio/STT hot paths.
+
+    Browser sends used to run inline under a shared lock, so a slow browser
+    could stall the audio sender (it blocks acquiring the lock at a progress
+    checkpoint), which stops audio flowing to Deepgram and triggers a net0001
+    "no audio within timeout window" disconnect. Here every event is instead
+    enqueued and drained by a single writer task, so nothing on the audio or
+    Deepgram-receive path ever waits on browser speed. Disposable events are
+    dropped under backpressure instead of blocking.
+    """
+
+    def __init__(self, websocket: WebSocket, *, maxsize: int = 512, critical_put_timeout: float = 5.0) -> None:
+        self._websocket = websocket
+        self._queue: "asyncio.Queue[Any]" = asyncio.Queue(maxsize=maxsize)
+        self._task: Optional[asyncio.Task] = None
+        self._closed = False
+        self._critical_put_timeout = critical_put_timeout
+
+    def start(self) -> None:
+        if self._task is None:
+            self._task = asyncio.create_task(self._run())
+
+    async def _run(self) -> None:
+        while True:
+            message = await self._queue.get()
+            if message is _BROWSER_SENDER_SENTINEL:
+                return
+            try:
+                await self._websocket.send_json(message)
+            except Exception:
+                self._closed = True
+                return
+
+    def _evict_one(self, *, droppable_only: bool) -> bool:
+        kept: List[Any] = []
+        removed = False
+        while not self._queue.empty():
+            item = self._queue.get_nowait()
+            if not removed and (not droppable_only or (isinstance(item, dict) and item.get("type") in _DROPPABLE_EVENTS)):
+                removed = True
+                continue
+            kept.append(item)
+        for item in kept:
+            self._queue.put_nowait(item)
+        return removed
+
+    async def emit(self, message: Dict[str, Any]) -> None:
+        # This MUST never block. It runs on the Deepgram-receive path
+        # (deepgram_to_browser); if it ever waited on a slow browser, the
+        # receive loop would stop draining the Deepgram socket, Deepgram would
+        # backpressure our socket, and both audio and KeepAlive sends would
+        # stall behind a full write buffer -> net0001 disconnect. So under
+        # backpressure we drop messages instead of ever awaiting.
+        if self._closed:
+            return
+        if self._task is None:
+            self.start()
+
+        if not self._queue.full():
+            self._queue.put_nowait(message)
+            return
+
+        if message.get("type") in _DROPPABLE_EVENTS:
+            return  # disposable; a newer one will arrive shortly
+        # Critical event: make room without blocking. Prefer evicting a stale
+        # disposable event; if none remain, drop the oldest queued event.
+        if not self._evict_one(droppable_only=True):
+            self._evict_one(droppable_only=False)
+        try:
+            self._queue.put_nowait(message)
+        except asyncio.QueueFull:
+            pass
+
+    async def aclose(self) -> None:
+        # Flush everything already queued, then stop the writer.
+        if self._closed and self._task is None:
+            return
+        if self._task is None:
+            return
+        try:
+            await self._queue.put(_BROWSER_SENDER_SENTINEL)
+        except Exception:
+            pass
+        try:
+            await asyncio.wait_for(self._task, timeout=max(2.0, self._critical_put_timeout))
+        except Exception:
+            self._task.cancel()
+        finally:
+            self._closed = True
+
+
+async def send_event(websocket: WebSocket, sender: "BrowserSender", event_type: str, **payload: Any) -> None:
     message = {"type": event_type, "ts": time.time(), **payload}
-    async with send_lock:
-        await websocket.send_json(message)
+    await sender.emit(message)
 
 
 def analysis_schema(strict: bool) -> Dict[str, Any]:
@@ -440,7 +547,7 @@ async def call_groq_resolution_check(settings: LiveSettings, state: LiveSessionS
     return updates if isinstance(updates, list) else []
 
 
-async def _resolve_open_issues(websocket: WebSocket, send_lock: asyncio.Lock, state: LiveSessionState, settings: LiveSettings, segment: str) -> None:
+async def _resolve_open_issues(websocket: WebSocket, sender: "BrowserSender", state: LiveSessionState, settings: LiveSettings, segment: str) -> None:
     if not (settings.issue_tracking_enabled and settings.issue_resolution_enabled):
         return
     if not state.open_issues():
@@ -463,14 +570,14 @@ async def _resolve_open_issues(websocket: WebSocket, send_lock: asyncio.Lock, st
         issue.resolution_message = str(update.get("dashboard_message") or "")
         if new_status == "resolved":
             issue.resolved_at = time.time()
-            await send_event(websocket, send_lock, "teacher.issue.resolved", session_id=state.session_id, issue=issue.public_dict())
+            await send_event(websocket, sender, "teacher.issue.resolved", session_id=state.session_id, issue=issue.public_dict())
         else:
-            await send_event(websocket, send_lock, "teacher.issue.updated", session_id=state.session_id, issue=issue.public_dict())
+            await send_event(websocket, sender, "teacher.issue.updated", session_id=state.session_id, issue=issue.public_dict())
 
 
 async def run_analysis_task(
     websocket: WebSocket,
-    send_lock: asyncio.Lock,
+    sender: "BrowserSender",
     state: LiveSessionState,
     settings: LiveSettings,
     segment: str,
@@ -480,12 +587,12 @@ async def run_analysis_task(
     include_feedback: bool = True,
     include_resolution: bool = True,
 ) -> None:
-    await send_event(websocket, send_lock, "analysis.started", session_id=state.session_id, from_index=from_index, to_index=to_index, include_feedback=include_feedback, include_resolution=include_resolution)
+    await send_event(websocket, sender, "analysis.started", session_id=state.session_id, from_index=from_index, to_index=to_index, include_feedback=include_feedback, include_resolution=include_resolution)
     try:
         if settings.llm_provider != "groq":
             raise HTTPException(status_code=400, detail=f"unsupported live LLM provider: {settings.llm_provider}")
         if include_resolution:
-            await _resolve_open_issues(websocket, send_lock, state, settings, segment)
+            await _resolve_open_issues(websocket, sender, state, settings, segment)
         if include_feedback:
             result = await call_groq_analysis(settings, state, segment)
             if settings.issue_tracking_enabled and _is_trackable_issue(result):
@@ -494,14 +601,14 @@ async def run_analysis_task(
                 result["issue_id"] = issue.issue_id
                 result["issue_status"] = issue.status
                 result["resolution_criteria"] = issue.resolution_criteria
-                await send_event(websocket, send_lock, "teacher.issue.created", session_id=state.session_id, issue=issue.public_dict())
+                await send_event(websocket, sender, "teacher.issue.created", session_id=state.session_id, issue=issue.public_dict())
             if result.get("should_alert_teacher"):
-                await send_event(websocket, send_lock, "teacher.hint", session_id=state.session_id, from_index=from_index, to_index=to_index, result=result)
+                await send_event(websocket, sender, "teacher.hint", session_id=state.session_id, from_index=from_index, to_index=to_index, result=result)
             else:
-                await send_event(websocket, send_lock, "teacher.no_issue", session_id=state.session_id, from_index=from_index, to_index=to_index, result=result)
+                await send_event(websocket, sender, "teacher.no_issue", session_id=state.session_id, from_index=from_index, to_index=to_index, result=result)
     except Exception as exc:
         detail = exc.detail if isinstance(exc, HTTPException) else str(exc)
-        await send_event(websocket, send_lock, "analysis.error", session_id=state.session_id, error=str(detail))
+        await send_event(websocket, sender, "analysis.error", session_id=state.session_id, error=str(detail))
 
 
 def _analysis_interval(settings: LiveSettings) -> float:
@@ -514,7 +621,7 @@ def _resolution_interval(settings: LiveSettings) -> float:
 
 async def maybe_schedule_analysis(
     websocket: WebSocket,
-    send_lock: asyncio.Lock,
+    sender: "BrowserSender",
     state: LiveSessionState,
     settings: LiveSettings,
     *,
@@ -536,7 +643,7 @@ async def maybe_schedule_analysis(
             return
         state.last_resolution_at = now
         state.analysis_task = asyncio.create_task(
-            run_analysis_task(websocket, send_lock, state, settings, context, state.analyzed_index, len(state.final_chunks), include_feedback=False, include_resolution=True)
+            run_analysis_task(websocket, sender, state, settings, context, state.analyzed_index, len(state.final_chunks), include_feedback=False, include_resolution=True)
         )
         return
     if not pending and force:
@@ -555,5 +662,5 @@ async def maybe_schedule_analysis(
     if include_resolution:
         state.last_resolution_at = now
     state.analysis_task = asyncio.create_task(
-        run_analysis_task(websocket, send_lock, state, settings, pending, from_index, to_index, include_feedback=True, include_resolution=include_resolution)
+        run_analysis_task(websocket, sender, state, settings, pending, from_index, to_index, include_feedback=True, include_resolution=include_resolution)
     )
