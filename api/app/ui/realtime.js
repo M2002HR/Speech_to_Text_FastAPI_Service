@@ -110,7 +110,9 @@ function handleMessage(event) {
   if (data.type === 'file.playback.progress') setStatus(`در حال پخش فایل: ${data.audio_seconds}s`, 'status-ok');
   if (data.type === 'stt.open') setStatus('STT stream باز شد', 'status-ok');
   if (data.type === 'session.closed') setStatus('جلسه بسته شد', 'status-warn');
-  if (data.type === 'error' || data.type === 'stt.error' || data.type === 'analysis.error') setStatus(data.error || data.message || 'خطا', 'status-bad');
+  if (data.type === 'error' || data.type === 'stt.error' || data.type === 'analysis.error' || data.type === 'file.playback.error') {
+    setStatus(data.error || data.message || data.traceback || 'خطا', 'status-bad');
+  }
 }
 
 async function startUploadedFile() {
