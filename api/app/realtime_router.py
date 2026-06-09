@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import asyncio
 import json
+import subprocess
 import time
+import traceback
 import uuid
 from dataclasses import replace
 from pathlib import Path
@@ -20,6 +22,21 @@ _UI_DIR = Path(__file__).resolve().parent / "ui"
 _REALTIME_UPLOAD_TTL_SEC = 6 * 60 * 60
 
 router = APIRouter(tags=["realtime"])
+
+
+def _exception_message(exc: BaseException) -> str:
+    text = str(exc).strip()
+    if text:
+        return text
+    return f"{exc.__class__.__module__}.{exc.__class__.__name__}: no message"
+
+
+def _exception_payload(exc: BaseException) -> Dict[str, Any]:
+    return {
+        "error": _exception_message(exc),
+        "error_type": exc.__class__.__name__,
+        "traceback": "".join(traceback.format_exception_only(type(exc), exc)).strip(),
+    }
 
 
 def _upload_store(request: Request) -> Dict[str, Dict[str, Any]]:
@@ -59,6 +76,30 @@ def _file_stream_settings(settings: LiveSettings) -> LiveSettings:
     return replace(settings, encoding="linear16", sample_rate=16000, channels=1)
 
 
+def _start_ffmpeg_raw_pcm(ffmpeg_binary: str, audio_path: Path) -> subprocess.Popen[bytes]:
+    return subprocess.Popen(
+        [
+            ffmpeg_binary,
+            "-v",
+            "error",
+            "-i",
+            str(audio_path),
+            "-vn",
+            "-f",
+            "s16le",
+            "-acodec",
+            "pcm_s16le",
+            "-ar",
+            "16000",
+            "-ac",
+            "1",
+            "pipe:1",
+        ],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+
+
 async def _file_to_deepgram(
     websocket: WebSocket,
     send_lock: asyncio.Lock,
@@ -79,35 +120,30 @@ async def _file_to_deepgram(
     if chunk_size % 2:
         chunk_size += 1
 
-    proc = await asyncio.create_subprocess_exec(
-        ffmpeg_binary,
-        "-v",
-        "error",
-        "-i",
-        str(audio_path),
-        "-vn",
-        "-f",
-        "s16le",
-        "-acodec",
-        "pcm_s16le",
-        "-ar",
-        str(sample_rate),
-        "-ac",
-        str(channels),
-        "pipe:1",
-        stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.PIPE,
+    if not audio_path.exists():
+        raise FileNotFoundError(f"prepared audio file not found: {audio_path}")
+
+    proc = await asyncio.to_thread(_start_ffmpeg_raw_pcm, ffmpeg_binary, audio_path)
+    sent_bytes = 0
+    started = time.monotonic()
+    await send_event(
+        websocket,
+        send_lock,
+        "file.playback.started",
+        session_id=state.session_id,
+        path=str(audio_path),
+        chunk_size=chunk_size,
     )
 
-    started = time.monotonic()
-    sent_bytes = 0
-    await send_event(websocket, send_lock, "file.playback.started", session_id=state.session_id)
     try:
-        assert proc.stdout is not None
+        if proc.stdout is None:
+            raise RuntimeError("ffmpeg stdout pipe was not created")
+
         while not stop_event.is_set():
-            chunk = await proc.stdout.read(chunk_size)
+            chunk = await asyncio.to_thread(proc.stdout.read, chunk_size)
             if not chunk:
                 break
+
             await deepgram_ws.send(chunk)
             sent_bytes += len(chunk)
             audio_elapsed = sent_bytes / float(bytes_per_second)
@@ -121,16 +157,36 @@ async def _file_to_deepgram(
                     "file.playback.progress",
                     session_id=state.session_id,
                     audio_seconds=round(audio_elapsed, 2),
+                    sent_bytes=sent_bytes,
                 )
+
+        return_code = await asyncio.to_thread(proc.wait)
+        if return_code != 0 or sent_bytes == 0:
+            stderr = b""
+            if proc.stderr is not None:
+                stderr = await asyncio.to_thread(proc.stderr.read)
+            detail = stderr.decode("utf-8", errors="replace")[:1200]
+            raise RuntimeError(f"ffmpeg realtime decode failed rc={return_code}; sent_bytes={sent_bytes}; stderr={detail}")
+
         await deepgram_ws.send(json.dumps({"type": "CloseStream"}))
+        await send_event(
+            websocket,
+            send_lock,
+            "file.playback.finished",
+            session_id=state.session_id,
+            audio_seconds=round(sent_bytes / float(bytes_per_second), 2),
+            sent_bytes=sent_bytes,
+        )
+    except Exception as exc:
+        await send_event(websocket, send_lock, "file.playback.error", session_id=state.session_id, **_exception_payload(exc))
+        raise
     finally:
-        if proc.returncode is None:
+        if proc.poll() is None:
             proc.terminate()
             try:
-                await asyncio.wait_for(proc.wait(), timeout=2.0)
+                await asyncio.wait_for(asyncio.to_thread(proc.wait), timeout=2.0)
             except asyncio.TimeoutError:
                 proc.kill()
-        await send_event(websocket, send_lock, "file.playback.finished", session_id=state.session_id)
 
 
 @router.get("/realtime", include_in_schema=False, summary="Realtime classroom STT panel")
@@ -240,6 +296,7 @@ async def realtime_ws(websocket: WebSocket) -> None:
             "upload_id": upload_session.get("upload_id"),
             "filename": upload_session.get("source_filename"),
             "duration_seconds": upload_session.get("duration_seconds"),
+            "prepared_path": upload_session.get("prepared_path"),
         } if upload_session else None,
         stt={
             "model": settings.deepgram_model,
@@ -296,7 +353,7 @@ async def realtime_ws(websocket: WebSocket) -> None:
                     continue
                 exc = task.exception()
                 if exc is not None and not isinstance(exc, WebSocketDisconnect):
-                    await send_event(websocket, send_lock, "error", session_id=state.session_id, error=str(exc))
+                    await send_event(websocket, send_lock, "error", session_id=state.session_id, **_exception_payload(exc))
             stop_event.set()
             for task in pending:
                 task.cancel()
@@ -305,11 +362,11 @@ async def realtime_ws(websocket: WebSocket) -> None:
         if state.analysis_task:
             try:
                 await asyncio.wait_for(state.analysis_task, timeout=settings.llm_timeout_sec + 5.0)
-            except Exception:
-                pass
+            except Exception as exc:
+                await send_event(websocket, send_lock, "analysis.error", session_id=state.session_id, **_exception_payload(exc))
 
     except Exception as exc:
-        await send_event(websocket, send_lock, "error", session_id=state.session_id, error=str(exc))
+        await send_event(websocket, send_lock, "error", session_id=state.session_id, **_exception_payload(exc))
 
     finally:
         stop_event.set()
