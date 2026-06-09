@@ -12,7 +12,7 @@
       <div>
         <p class="eyebrow">Tootak · Realtime</p>
         <h1>کلاس زنده: تبدیل گفتار به متن و بازخورد آموزشی</h1>
-        <p class="muted">این صفحه برای نمایش زیرنویس زنده و هشدارهای کوتاه مخصوص استاد ساخته شده است.</p>
+        <p class="muted">از میکروفون زنده استفاده کن یا فایل صوتی/ویدیویی کلاس را آپلود کن تا با سرعت شبه‌زنده پردازش شود.</p>
       </div>
       <div class="status-pill" id="statusPill">در حال بررسی...</div>
     </section>
@@ -20,6 +20,9 @@
     <section class="grid">
       <form id="controlForm" class="card stack">
         <h2>تنظیمات جلسه</h2>
+        <label><span>منبع صدا</span><select id="sourceMode"><option value="mic">میکروفون زنده</option><option value="upload">فایل آپلودشده</option></select></label>
+        <label id="fileRow"><span>فایل صوتی/ویدیویی کلاس</span><input id="mediaFile" type="file" accept="audio/*,video/*" /></label>
+        <div class="actions"><button id="uploadBtn" type="button">آپلود فایل</button><span id="uploadHint" class="muted">فایلی آپلود نشده است.</span></div>
         <label><span>زبان</span><select id="language"><option value="fa">فارسی</option><option value="en">English</option><option value="">Auto</option></select></label>
         <label><span>موضوع درس</span><input id="topic" placeholder="مثلاً مشتق، تاریخ ایران، مدار منطقی..." /></label>
         <label><span>اصطلاحات کلیدی</span><input id="keyterms" placeholder="با ویرگول جدا کن" /></label>
