@@ -1,6 +1,0 @@
-.issue-status { margin: 8px 0; border-radius: 14px; padding: 9px 11px; border: 1px solid rgba(255,255,255,.10); font-size: .9rem; }
-.issue-status span { color: rgba(247,247,251,.72); }
-.issue-open { border-color: rgba(255,198,87,.50); background: rgba(255,198,87,.09); }
-.issue-probably { border-color: rgba(110,168,254,.55); background: rgba(110,168,254,.10); }
-.issue-resolved { border-color: rgba(36,205,129,.60); background: rgba(36,205,129,.12); }
-.hint-card.issue-resolved { opacity: .78; }
