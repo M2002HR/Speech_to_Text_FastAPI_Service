@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 from datetime import datetime
 from typing import Any, Dict, List, Literal, Optional
@@ -46,7 +46,7 @@ class ProviderRuntimeStatusResponse(BaseModel):
 
 
 class ProviderPanelConfig(BaseModel):
-    name: Literal["openai", "groq"]
+    name: Literal["openai", "groq", "deepgram"]
     enabled: bool = False
     base_url: str = ""
     model: str = ""
@@ -65,7 +65,7 @@ class ProviderPanelSettingsUpdateRequest(BaseModel):
 
 
 class ProviderKeyTestRequest(BaseModel):
-    provider: Literal["openai", "groq"]
+    provider: Literal["openai", "groq", "deepgram"]
     api_key: str
     base_url: Optional[str] = None
 
@@ -78,7 +78,7 @@ class ProviderKeyTestResponse(BaseModel):
 
 
 class TranscribeOptions(BaseModel):
-    provider: Optional[Literal["local", "openai", "groq", "custom"]] = None
+    provider: Optional[Literal["local", "openai", "groq", "deepgram", "custom"]] = None
     model: Optional[str] = None
     language: Optional[str] = None
     prompt: Optional[str] = None
