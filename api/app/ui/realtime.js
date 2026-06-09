@@ -10,22 +10,36 @@ const language = document.getElementById('language');
 const topic = document.getElementById('topic');
 const keyterms = document.getElementById('keyterms');
 const diarize = document.getElementById('diarize');
+const autoScroll = document.getElementById('autoScroll');
+const showJsonLog = document.getElementById('showJsonLog');
+const maxLogItems = document.getElementById('maxLogItems');
 const startBtn = document.getElementById('startBtn');
 const stopBtn = document.getElementById('stopBtn');
 const partial = document.getElementById('partial');
 const finalText = document.getElementById('finalText');
 const hints = document.getElementById('hints');
 
-const state = { ws: null, upload: null, finalParts: [], hintCount: 0 };
+const state = { ws: null, upload: null, finalParts: [], hintCount: 0, logEntries: [] };
 
 function setStatus(text, cls = '') {
   statusPill.textContent = text;
   statusPill.className = `status-pill ${cls}`.trim();
 }
 
+function shouldAutoScroll() { return !autoScroll || autoScroll.checked; }
+function maxLogCount() {
+  const value = Number(maxLogItems?.value || 120);
+  return Number.isFinite(value) ? Math.max(20, Math.min(400, Math.round(value))) : 120;
+}
+
 function log(type, data = {}) {
-  const payload = typeof data === 'string' ? data : JSON.stringify(data).slice(0, 1400);
-  events.textContent = `${new Date().toLocaleTimeString()} ${type} ${payload}\n` + events.textContent.slice(0, 12000);
+  const detailed = !showJsonLog || showJsonLog.checked;
+  const clean = typeof data === 'string' ? data : JSON.stringify(data);
+  const payload = detailed ? clean.slice(0, 1400) : clean.replace(/\s+/g, ' ').slice(0, 520);
+  state.logEntries.unshift(`${new Date().toLocaleTimeString()} ${type} ${payload}`);
+  state.logEntries = state.logEntries.slice(0, maxLogCount());
+  events.textContent = state.logEntries.join('\n');
+  if (shouldAutoScroll()) events.scrollTop = 0;
 }
 
 function escapeHtml(value) {
@@ -40,8 +54,10 @@ function wsUrl() {
 function resetOutput() {
   state.finalParts = [];
   state.hintCount = 0;
+  state.logEntries = [];
   partial.textContent = '...';
   finalText.textContent = '';
+  events.textContent = '';
   hints.innerHTML = '<p class="muted">هنوز بازخوردی تولید نشده است.</p>';
 }
 
@@ -87,6 +103,7 @@ function addHint(result) {
     ${result.evidence ? `<p class="muted"><b>شاهد:</b> ${escapeHtml(result.evidence)}</p>` : ''}
   `;
   hints.prepend(node);
+  if (shouldAutoScroll()) hints.scrollTop = 0;
 }
 
 function applyIssueUpdate(issue, eventType) {
@@ -98,6 +115,7 @@ function applyIssueUpdate(issue, eventType) {
     node.dataset.issueId = issue.issue_id;
     node.innerHTML = `<strong>${eventType === 'teacher.issue.resolved' ? '✅ حل شد' : 'به‌روزرسانی هشدار'}</strong>${renderIssueStatus(issue)}<p>${escapeHtml(issue.short_feedback || '')}</p>`;
     hints.prepend(node);
+    if (shouldAutoScroll()) hints.scrollTop = 0;
     return;
   }
   card.classList.remove('issue-open', 'issue-probably', 'issue-resolved');
@@ -154,21 +172,22 @@ function handleMessage(event) {
   let data;
   try { data = JSON.parse(event.data); } catch { log('raw', event.data); return; }
   log(data.type, data);
-  if (data.type === 'transcript.partial') partial.textContent = data.text || '';
+  if (data.type === 'transcript.partial') {
+    partial.textContent = data.text || '';
+    if (shouldAutoScroll()) partial.scrollTop = partial.scrollHeight;
+  }
   if (data.type === 'transcript.final' && data.text) {
     partial.textContent = '';
     state.finalParts.push(data.text);
     finalText.textContent = state.finalParts.join('\n');
-    finalText.scrollTop = finalText.scrollHeight;
+    if (shouldAutoScroll()) finalText.scrollTop = finalText.scrollHeight;
   }
   if (data.type === 'teacher.hint') addHint(data.result);
   if (data.type === 'teacher.issue.updated' || data.type === 'teacher.issue.resolved') applyIssueUpdate(data.issue, data.type);
   if (data.type === 'file.playback.progress') setStatus(`در حال پخش فایل: ${data.audio_seconds}s`, 'status-ok');
   if (data.type === 'stt.open') setStatus('STT stream باز شد', 'status-ok');
   if (data.type === 'session.closed') setStatus('جلسه بسته شد', 'status-warn');
-  if (data.type === 'error' || data.type === 'stt.error' || data.type === 'analysis.error' || data.type === 'file.playback.error') {
-    setStatus(data.error || data.message || data.traceback || 'خطا', 'status-bad');
-  }
+  if (data.type === 'error' || data.type === 'stt.error' || data.type === 'analysis.error' || data.type === 'file.playback.error') setStatus(data.error || data.message || 'خطا', 'status-bad');
 }
 
 async function startUploadedFile() {
@@ -221,4 +240,9 @@ uploadBtn.addEventListener('click', uploadFile);
 form.addEventListener('submit', startSession);
 stopBtn.addEventListener('click', () => stopSession(false));
 sourceMode.addEventListener('change', () => setStatus(sourceMode.value === 'upload' ? 'حالت فایل: اول فایل را آپلود کن' : 'برای میکروفون زنده فعلاً از /live استفاده کن', 'status-warn'));
+showJsonLog?.addEventListener('change', () => log('dashboard.log_mode', { detailed: showJsonLog.checked }));
+maxLogItems?.addEventListener('change', () => {
+  state.logEntries = state.logEntries.slice(0, maxLogCount());
+  events.textContent = state.logEntries.join('\n');
+});
 loadStatus();
