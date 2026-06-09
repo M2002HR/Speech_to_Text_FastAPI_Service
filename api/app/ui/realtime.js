@@ -28,6 +28,10 @@ function log(type, data = {}) {
   events.textContent = `${new Date().toLocaleTimeString()} ${type} ${payload}\n` + events.textContent.slice(0, 12000);
 }
 
+function escapeHtml(value) {
+  return String(value || '').replace(/[&<>"]/g, (ch) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[ch]));
+}
+
 function wsUrl() {
   const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
   return `${proto}//${location.host}/ws/realtime`;
@@ -46,9 +50,22 @@ function addHint(result) {
   if (state.hintCount === 0) hints.innerHTML = '';
   state.hintCount += 1;
   const node = document.createElement('div');
-  node.className = 'hint-card';
+  node.className = `hint-card hint-${result.severity_label || result.alert_level || 'none'}`;
   const confidence = Number(result.confidence || 0).toFixed(2);
-  node.innerHTML = `<strong>${state.hintCount}. ${result.alert_level || 'none'} · ${result.issue_type || 'none'} · ${confidence}</strong><div>${result.short_feedback || 'بدون هشدار مهم.'}</div>${result.suggested_teacher_action ? `<p><b>اقدام:</b> ${result.suggested_teacher_action}</p>` : ''}${result.suggested_example ? `<p><b>مثال:</b> ${result.suggested_example}</p>` : ''}${result.evidence ? `<p class="muted"><b>شاهد:</b> ${result.evidence}</p>` : ''}`;
+  const tags = Array.isArray(result.tags) ? result.tags : [];
+  const badges = [
+    result.alert_category,
+    result.severity_label,
+    result.issue_type,
+    ...tags,
+  ].filter(Boolean).map((tag) => `<span class="hint-badge">${escapeHtml(tag)}</span>`).join('');
+  node.innerHTML = `
+    <strong>${state.hintCount}. ${escapeHtml(result.short_feedback || 'بدون هشدار مهم.')}</strong>
+    <div class="hint-badges">${badges}<span class="hint-badge">confidence ${confidence}</span></div>
+    ${result.suggested_teacher_action ? `<p><b>اقدام:</b> ${escapeHtml(result.suggested_teacher_action)}</p>` : ''}
+    ${result.suggested_example ? `<p><b>مثال:</b> ${escapeHtml(result.suggested_example)}</p>` : ''}
+    ${result.evidence ? `<p class="muted"><b>شاهد:</b> ${escapeHtml(result.evidence)}</p>` : ''}
+  `;
   hints.prepend(node);
 }
 
