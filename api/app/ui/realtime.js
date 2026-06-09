@@ -45,28 +45,66 @@ function resetOutput() {
   hints.innerHTML = '<p class="muted">هنوز بازخوردی تولید نشده است.</p>';
 }
 
+function statusLabel(status) {
+  if (status === 'resolved') return 'حل شد';
+  if (status === 'probably_addressed') return 'احتمالاً رفع شد';
+  return 'باز';
+}
+
+function statusClass(status) {
+  if (status === 'resolved') return 'issue-resolved';
+  if (status === 'probably_addressed') return 'issue-probably';
+  return 'issue-open';
+}
+
+function renderIssueStatus(issue) {
+  if (!issue) return '';
+  const status = issue.status || 'open';
+  const evidence = issue.resolution_evidence || issue.resolution_message || '';
+  return `<div class="issue-status ${statusClass(status)}"><b>وضعیت:</b> ${statusLabel(status)}${evidence ? `<br><span>${escapeHtml(evidence)}</span>` : ''}</div>`;
+}
+
 function addHint(result) {
   if (!result) return;
   if (state.hintCount === 0) hints.innerHTML = '';
   state.hintCount += 1;
   const node = document.createElement('div');
   node.className = `hint-card hint-${result.severity_label || result.alert_level || 'none'}`;
+  if (result.issue_id) node.dataset.issueId = result.issue_id;
   const confidence = Number(result.confidence || 0).toFixed(2);
   const tags = Array.isArray(result.tags) ? result.tags : [];
-  const badges = [
-    result.alert_category,
-    result.severity_label,
-    result.issue_type,
-    ...tags,
-  ].filter(Boolean).map((tag) => `<span class="hint-badge">${escapeHtml(tag)}</span>`).join('');
+  const badges = [result.alert_category, result.severity_label, result.issue_type, ...tags]
+    .filter(Boolean)
+    .map((tag) => `<span class="hint-badge">${escapeHtml(tag)}</span>`)
+    .join('');
   node.innerHTML = `
     <strong>${state.hintCount}. ${escapeHtml(result.short_feedback || 'بدون هشدار مهم.')}</strong>
     <div class="hint-badges">${badges}<span class="hint-badge">confidence ${confidence}</span></div>
+    ${result.issue_id ? `<div class="issue-status issue-open"><b>وضعیت:</b> باز</div>` : ''}
+    ${result.resolution_criteria ? `<p class="muted"><b>معیار حل‌شدن:</b> ${escapeHtml(result.resolution_criteria)}</p>` : ''}
     ${result.suggested_teacher_action ? `<p><b>اقدام:</b> ${escapeHtml(result.suggested_teacher_action)}</p>` : ''}
     ${result.suggested_example ? `<p><b>مثال:</b> ${escapeHtml(result.suggested_example)}</p>` : ''}
     ${result.evidence ? `<p class="muted"><b>شاهد:</b> ${escapeHtml(result.evidence)}</p>` : ''}
   `;
   hints.prepend(node);
+}
+
+function applyIssueUpdate(issue, eventType) {
+  if (!issue || !issue.issue_id) return;
+  const card = hints.querySelector(`[data-issue-id="${CSS.escape(issue.issue_id)}"]`);
+  if (!card) {
+    const node = document.createElement('div');
+    node.className = `hint-card ${statusClass(issue.status)}`;
+    node.dataset.issueId = issue.issue_id;
+    node.innerHTML = `<strong>${eventType === 'teacher.issue.resolved' ? '✅ حل شد' : 'به‌روزرسانی هشدار'}</strong>${renderIssueStatus(issue)}<p>${escapeHtml(issue.short_feedback || '')}</p>`;
+    hints.prepend(node);
+    return;
+  }
+  card.classList.remove('issue-open', 'issue-probably', 'issue-resolved');
+  card.classList.add(statusClass(issue.status));
+  const existing = card.querySelector('.issue-status');
+  if (existing) existing.outerHTML = renderIssueStatus(issue);
+  else card.insertAdjacentHTML('afterbegin', renderIssueStatus(issue));
 }
 
 async function loadStatus() {
@@ -124,6 +162,7 @@ function handleMessage(event) {
     finalText.scrollTop = finalText.scrollHeight;
   }
   if (data.type === 'teacher.hint') addHint(data.result);
+  if (data.type === 'teacher.issue.updated' || data.type === 'teacher.issue.resolved') applyIssueUpdate(data.issue, data.type);
   if (data.type === 'file.playback.progress') setStatus(`در حال پخش فایل: ${data.audio_seconds}s`, 'status-ok');
   if (data.type === 'stt.open') setStatus('STT stream باز شد', 'status-ok');
   if (data.type === 'session.closed') setStatus('جلسه بسته شد', 'status-warn');
