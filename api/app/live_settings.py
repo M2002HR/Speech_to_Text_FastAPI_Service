@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import os
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Any, Dict, List
 from urllib.parse import urlencode
 
@@ -49,10 +49,42 @@ def mask_secret(value: str) -> str:
     return f"{clean[:3]}***{clean[-3:]}"
 
 
+def clean_client_text(value: Any, max_len: int = 500) -> str:
+    text = str(value or "").strip()
+    return text[:max_len]
+
+
+def client_bool(value: Any, default: bool) -> bool:
+    if value is None or value == "":
+        return default
+    if isinstance(value, bool):
+        return value
+    return str(value).strip().lower() in {"1", "true", "yes", "on"}
+
+
+def client_int(value: Any, default: int, min_value: int, max_value: int) -> int:
+    if value is None or value == "":
+        return default
+    try:
+        parsed = int(float(value))
+    except (TypeError, ValueError):
+        return default
+    return max(min_value, min(max_value, parsed))
+
+
+def client_float(value: Any, default: float, min_value: float, max_value: float) -> float:
+    if value is None or value == "":
+        return default
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError):
+        return default
+    return max(min_value, min(max_value, parsed))
+
+
 @dataclass
 class LiveSettings:
     enabled: bool = True
-
     deepgram_api_key: str = ""
     deepgram_base_url: str = "wss://api.deepgram.com/v1/listen"
     deepgram_model: str = "nova-3"
@@ -76,7 +108,6 @@ class LiveSettings:
     ping_timeout_sec: float = 20.0
     connect_retries: int = 2
     connect_retry_backoff_sec: float = 2.0
-
     llm_enabled: bool = True
     llm_provider: str = "groq"
     llm_api_key: str = ""
@@ -86,27 +117,20 @@ class LiveSettings:
     llm_max_tokens: int = 700
     llm_timeout_sec: float = 25.0
     llm_min_chars: int = 220
-    llm_interval_sec: float = 18.0
+    llm_interval_sec: float = 180.0
+    analysis_interval_sec: float = 180.0
     llm_context_chars: int = 6000
     llm_strict_schema: bool = True
     issue_tracking_enabled: bool = True
     issue_resolution_enabled: bool = True
+    issue_resolution_interval_sec: float = 300.0
     issue_resolution_min_confidence: float = 0.68
 
     @classmethod
     def from_env(cls) -> "LiveSettings":
-        deepgram_key = (
-            os.getenv("DEEPGRAM_API_KEY")
-            or os.getenv("PROVIDER_DEEPGRAM_API_KEY")
-            or os.getenv("LIVE_DEEPGRAM_API_KEY")
-            or ""
-        )
-        groq_key = (
-            os.getenv("GROQ_API_KEY")
-            or os.getenv("PROVIDER_GROQ_API_KEY")
-            or os.getenv("LIVE_LLM_API_KEY")
-            or ""
-        )
+        deepgram_key = os.getenv("DEEPGRAM_API_KEY") or os.getenv("PROVIDER_DEEPGRAM_API_KEY") or os.getenv("LIVE_DEEPGRAM_API_KEY") or ""
+        groq_key = os.getenv("GROQ_API_KEY") or os.getenv("PROVIDER_GROQ_API_KEY") or os.getenv("LIVE_LLM_API_KEY") or ""
+        analysis_interval = env_float("LIVE_ANALYSIS_INTERVAL_SEC", env_float("LIVE_LLM_INTERVAL_SEC", 180.0))
         return cls(
             enabled=env_bool("LIVE_ENABLED", True),
             deepgram_api_key=deepgram_key.strip(),
@@ -141,11 +165,13 @@ class LiveSettings:
             llm_max_tokens=env_int("LIVE_LLM_MAX_TOKENS", 700),
             llm_timeout_sec=env_float("LIVE_LLM_TIMEOUT_SEC", 25.0),
             llm_min_chars=env_int("LIVE_LLM_MIN_CHARS", 220),
-            llm_interval_sec=env_float("LIVE_LLM_INTERVAL_SEC", 18.0),
+            llm_interval_sec=analysis_interval,
+            analysis_interval_sec=analysis_interval,
             llm_context_chars=env_int("LIVE_LLM_CONTEXT_CHARS", 6000),
             llm_strict_schema=env_bool("LIVE_LLM_STRICT_SCHEMA", True),
             issue_tracking_enabled=env_bool("LIVE_ISSUE_TRACKING_ENABLED", True),
             issue_resolution_enabled=env_bool("LIVE_ISSUE_RESOLUTION_ENABLED", True),
+            issue_resolution_interval_sec=env_float("LIVE_ISSUE_RESOLUTION_INTERVAL_SEC", 300.0),
             issue_resolution_min_confidence=env_float("LIVE_ISSUE_RESOLUTION_MIN_CONFIDENCE", 0.68),
         )
 
@@ -175,21 +201,32 @@ class LiveSettings:
                 "provider": self.llm_provider,
                 "base_url": self.llm_base_url,
                 "model": self.llm_model,
-                "interval_sec": self.llm_interval_sec,
+                "interval_sec": self.analysis_interval_sec,
                 "min_chars": self.llm_min_chars,
                 "strict_schema": self.llm_strict_schema,
             },
             "issue_tracking": {
                 "enabled": self.issue_tracking_enabled,
                 "resolution_enabled": self.issue_resolution_enabled,
+                "resolution_interval_sec": self.issue_resolution_interval_sec,
                 "resolution_min_confidence": self.issue_resolution_min_confidence,
             },
         }
 
 
-def clean_client_text(value: Any, max_len: int = 500) -> str:
-    text = str(value or "").strip()
-    return text[:max_len]
+def apply_client_settings(settings: LiveSettings, message: Dict[str, Any]) -> LiveSettings:
+    analysis_interval = client_float(message.get("analysis_interval_sec"), settings.analysis_interval_sec, 20.0, 3600.0)
+    return replace(
+        settings,
+        llm_enabled=client_bool(message.get("llm_enabled"), settings.llm_enabled),
+        llm_min_chars=client_int(message.get("llm_min_chars"), settings.llm_min_chars, 80, 3000),
+        llm_interval_sec=analysis_interval,
+        analysis_interval_sec=analysis_interval,
+        issue_tracking_enabled=client_bool(message.get("issue_tracking_enabled"), settings.issue_tracking_enabled),
+        issue_resolution_enabled=client_bool(message.get("issue_resolution_enabled"), settings.issue_resolution_enabled),
+        issue_resolution_interval_sec=client_float(message.get("resolution_interval_sec"), settings.issue_resolution_interval_sec, 30.0, 7200.0),
+        issue_resolution_min_confidence=client_float(message.get("issue_resolution_min_confidence"), settings.issue_resolution_min_confidence, 0.0, 1.0),
+    )
 
 
 def extract_client_options(message: Dict[str, Any], settings: LiveSettings) -> Dict[str, Any]:
