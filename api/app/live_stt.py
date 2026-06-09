@@ -10,17 +10,50 @@ from .live_analysis import LiveSessionState, TranscriptChunk, maybe_schedule_ana
 from .live_settings import LiveSettings
 
 
-async def connect_deepgram(url: str, api_key: str) -> Any:
+def _connect_error_message(exc: BaseException, settings: LiveSettings, attempt: int) -> str:
+    base = str(exc).strip() or f"{exc.__class__.__module__}.{exc.__class__.__name__}: no message"
+    if isinstance(exc, asyncio.TimeoutError) or "timed out during handshake" in base.lower():
+        return (
+            f"Deepgram websocket handshake timed out on attempt {attempt}. "
+            f"open_timeout={settings.open_timeout_sec}s, url={settings.deepgram_base_url}. "
+            "Check internet access from the backend machine, VPN/proxy/firewall rules, and whether wss://api.deepgram.com is reachable. "
+            f"Original error: {base}"
+        )
+    return f"Deepgram websocket connection failed on attempt {attempt}: {base}"
+
+
+async def connect_deepgram(url: str, api_key: str, settings: Optional[LiveSettings] = None) -> Any:
     try:
         import websockets
     except Exception as exc:  # pragma: no cover
         raise RuntimeError("websockets package is required for live Deepgram streaming") from exc
 
+    settings = settings or LiveSettings()
     headers = {"Authorization": f"Token {api_key}"}
-    try:
-        return await websockets.connect(url, additional_headers=headers, max_size=8 * 1024 * 1024)
-    except TypeError:
-        return await websockets.connect(url, extra_headers=headers, max_size=8 * 1024 * 1024)
+    attempts = max(1, int(settings.connect_retries or 1))
+    last_exc: Optional[BaseException] = None
+
+    for attempt in range(1, attempts + 1):
+        try:
+            kwargs = {
+                "max_size": 8 * 1024 * 1024,
+                "open_timeout": max(5.0, float(settings.open_timeout_sec or 45.0)),
+                "close_timeout": max(1.0, float(settings.close_timeout_sec or 10.0)),
+                "ping_interval": max(5.0, float(settings.ping_interval_sec or 20.0)),
+                "ping_timeout": max(5.0, float(settings.ping_timeout_sec or 20.0)),
+            }
+            try:
+                return await websockets.connect(url, additional_headers=headers, **kwargs)
+            except TypeError:
+                return await websockets.connect(url, extra_headers=headers, **kwargs)
+        except Exception as exc:
+            last_exc = exc
+            if attempt >= attempts:
+                break
+            await asyncio.sleep(max(0.0, float(settings.connect_retry_backoff_sec or 2.0)) * attempt)
+
+    assert last_exc is not None
+    raise TimeoutError(_connect_error_message(last_exc, settings, attempts)) from last_exc
 
 
 def deepgram_transcript_payload(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
