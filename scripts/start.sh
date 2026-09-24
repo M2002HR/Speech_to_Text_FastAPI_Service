@@ -114,9 +114,10 @@ read_env_value(){
 }
 
 apply_outbound_proxy_from_env(){
-  local env_path="$1" enabled proxy_url bypass
+  local env_path="$1" enabled proxy_url bootstrap_proxy bypass
   enabled="$(read_env_value OUTBOUND_PROXY_ENABLED "$env_path")"
   proxy_url="$(read_env_value OUTBOUND_PROXY_URL "$env_path")"
+  bootstrap_proxy="$(read_env_value OUTBOUND_BOOTSTRAP_PROXY_URL "$env_path")"
   bypass="$(read_env_value OUTBOUND_NO_PROXY "$env_path")"
 
   case "${enabled,,}" in
@@ -124,11 +125,15 @@ apply_outbound_proxy_from_env(){
       [[ -n "$proxy_url" ]] || fail "OUTBOUND_PROXY_ENABLED is true but OUTBOUND_PROXY_URL is empty"
       export HTTP_PROXY="$proxy_url" HTTPS_PROXY="$proxy_url" ALL_PROXY="$proxy_url"
       export http_proxy="$proxy_url" https_proxy="$proxy_url" all_proxy="$proxy_url"
+      # pip uses requests, which needs PySocks before it can use a SOCKS URL.
+      # The local 2080 listener also exposes HTTP, so bootstrap over it first.
+      if [[ -z "$bootstrap_proxy" ]]; then bootstrap_proxy="http://${proxy_url#*://}"; fi
+      export PIP_PROXY="$bootstrap_proxy"
       if [[ -n "$bypass" ]]; then export NO_PROXY="$bypass" no_proxy="$bypass"; fi
       log "Outbound proxy enabled from OUTBOUND_PROXY_URL"
       ;;
     *)
-      unset HTTP_PROXY HTTPS_PROXY ALL_PROXY http_proxy https_proxy all_proxy NO_PROXY no_proxy
+      unset HTTP_PROXY HTTPS_PROXY ALL_PROXY http_proxy https_proxy all_proxy PIP_PROXY NO_PROXY no_proxy
       log "Outbound proxy disabled by OUTBOUND_PROXY_ENABLED"
       ;;
   esac

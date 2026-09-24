@@ -110,10 +110,11 @@ When this machine needs a proxy for Groq, Deepgram, model downloads, or live Web
 ```dotenv
 OUTBOUND_PROXY_ENABLED=true
 OUTBOUND_PROXY_URL=socks5h://127.0.0.1:2080
+OUTBOUND_BOOTSTRAP_PROXY_URL=http://127.0.0.1:2080
 OUTBOUND_NO_PROXY=localhost,127.0.0.1,::1
 ```
 
-Both launchers export the standard proxy environment variables before they run setup, tests, smoke checks, or the server. Set `OUTBOUND_PROXY_ENABLED=false` to disable and clear inherited proxy variables.
+Both launchers export the standard proxy environment variables before they run setup, tests, smoke checks, or the server. The bootstrap URL lets pip use the HTTP listener until SOCKS support has been installed. Set `OUTBOUND_PROXY_ENABLED=false` to disable and clear inherited proxy variables.
 
 ## Live accuracy settings
 

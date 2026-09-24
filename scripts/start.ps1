@@ -227,6 +227,7 @@ function Get-HfTokenFromEnvironment {
 function Set-OutboundProxyEnvironment {
   $enabled = (Get-EnvValue "OUTBOUND_PROXY_ENABLED" "false").Trim().ToLowerInvariant()
   $proxyUrl = (Get-EnvValue "OUTBOUND_PROXY_URL" "").Trim()
+  $bootstrapProxyUrl = (Get-EnvValue "OUTBOUND_BOOTSTRAP_PROXY_URL" "").Trim()
   $noProxy = (Get-EnvValue "OUTBOUND_NO_PROXY" "localhost,127.0.0.1,::1").Trim()
   $proxyNames = @("HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "http_proxy", "https_proxy", "all_proxy")
 
@@ -237,11 +238,15 @@ function Set-OutboundProxyEnvironment {
     foreach ($name in $proxyNames) {
       [Environment]::SetEnvironmentVariable($name, $proxyUrl, "Process")
     }
+    if ([string]::IsNullOrWhiteSpace($bootstrapProxyUrl)) {
+      $bootstrapProxyUrl = "http://" + ($proxyUrl -replace "^[a-zA-Z0-9]+://", "")
+    }
+    [Environment]::SetEnvironmentVariable("PIP_PROXY", $bootstrapProxyUrl, "Process")
     [Environment]::SetEnvironmentVariable("NO_PROXY", $noProxy, "Process")
     [Environment]::SetEnvironmentVariable("no_proxy", $noProxy, "Process")
     Write-Ok "Outbound proxy enabled from OUTBOUND_PROXY_URL"
   } else {
-    foreach ($name in @($proxyNames + @("NO_PROXY", "no_proxy"))) {
+    foreach ($name in @($proxyNames + @("PIP_PROXY", "NO_PROXY", "no_proxy"))) {
       [Environment]::SetEnvironmentVariable($name, $null, "Process")
     }
     Write-Ok "Outbound proxy disabled by OUTBOUND_PROXY_ENABLED"

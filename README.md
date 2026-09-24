@@ -155,10 +155,11 @@ Set these values in `.env` when the host must reach remote providers through a p
 ```dotenv
 OUTBOUND_PROXY_ENABLED=true
 OUTBOUND_PROXY_URL=socks5h://127.0.0.1:2080
+OUTBOUND_BOOTSTRAP_PROXY_URL=http://127.0.0.1:2080
 OUTBOUND_NO_PROXY=localhost,127.0.0.1,::1
 ```
 
-The setting is applied to HTTP clients, WebSocket clients, model downloads, and launcher child processes. Use `OUTBOUND_PROXY_ENABLED=false` to clear inherited proxy variables. Remote transcription is encoded as compact MP3 by default (`PROCESSING_REMOTE_*`) so multipart uploads remain reliable through constrained proxies.
+The setting is applied to HTTP clients, WebSocket clients, model downloads, and launcher child processes. `OUTBOUND_BOOTSTRAP_PROXY_URL` lets pip use the HTTP listener during the first dependency install, before SOCKS support is installed. Use `OUTBOUND_PROXY_ENABLED=false` to clear inherited proxy variables. Remote transcription is encoded as compact MP3 by default (`PROCESSING_REMOTE_*`) so multipart uploads remain reliable through constrained proxies.
 
 ## Repository structure
 
