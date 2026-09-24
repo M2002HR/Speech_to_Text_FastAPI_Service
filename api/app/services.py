@@ -521,7 +521,20 @@ class MediaService:
         await upload.close()
         return dest_path
 
-    async def extract_audio(self, input_path: Path, source_name: str, content_type: Optional[str]) -> Path:
+    def _audio_encode_options(self, output_format: str) -> tuple[str, Optional[str]]:
+        normalized = str(output_format or "wav").strip(".").lower()
+        if normalized == "mp3":
+            return "libmp3lame", f"{int(self.settings.processing.remote_audio_bitrate_kbps)}k"
+        return self.settings.processing.audio_codec, None
+
+    async def extract_audio(
+        self,
+        input_path: Path,
+        source_name: str,
+        content_type: Optional[str],
+        *,
+        output_format: Optional[str] = None,
+    ) -> Path:
         needs_extract = self.settings.processing.always_extract_audio or is_video_file(source_name, content_type)
         if not needs_extract:
             return input_path
@@ -532,7 +545,8 @@ class MediaService:
                 detail=f"ffmpeg binary not found: {self.settings.processing.ffmpeg_binary}",
             )
 
-        out_ext = self.settings.processing.extracted_audio_format.strip(".")
+        out_ext = (output_format or self.settings.processing.extracted_audio_format).strip(".").lower()
+        codec, bitrate = self._audio_encode_options(out_ext)
         out_path = Path(self.settings.storage.output_dir) / f"{uuid.uuid4().hex}.{out_ext}"
 
         cmd = [
@@ -542,13 +556,15 @@ class MediaService:
             str(input_path),
             "-vn",
             "-acodec",
-            self.settings.processing.audio_codec,
+            codec,
             "-ar",
             str(self.settings.processing.audio_sample_rate),
             "-ac",
             str(self.settings.processing.audio_channels),
-            str(out_path),
         ]
+        if bitrate:
+            cmd.extend(["-b:a", bitrate])
+        cmd.append(str(out_path))
 
         result = await asyncio.to_thread(
             subprocess.run,
@@ -1166,16 +1182,42 @@ class APITranscriber:
         url = join_url(provider.base_url, provider.transcriptions_path)
         model_name = str(options.get("model") or provider.model)
 
-        data: Dict[str, Any] = {
-            "model": model_name,
-        }
+        data: Dict[str, Any] = {"model": model_name}
         language_code = sanitize_language_code(options.get("language"))
         if language_code:
             data["language"] = language_code
         if options.get("prompt"):
-            data["prompt"] = options["prompt"]
-        if options.get("response_format"):
-            data["response_format"] = options["response_format"]
+            data["prompt"] = str(options["prompt"])
+
+        response_format = str(
+            options.get("response_format") or self.settings.transcription.default_response_format or ""
+        ).strip()
+        wants_word_timestamps = (
+            self.settings.transcription.enable_word_timestamps
+            if options.get("word_timestamps") is None
+            else bool(options.get("word_timestamps"))
+        )
+        wants_segment_timestamps = (
+            self.settings.transcription.enable_segment_timestamps
+            if options.get("segment_timestamps") is None
+            else bool(options.get("segment_timestamps"))
+        )
+
+        # Groq exposes word timestamps only when verbose_json and explicit
+        # timestamp granularities are requested. OpenAI uses the same
+        # multipart field, so use it for both compatible Whisper providers.
+        if provider_name in {"groq", "openai"} and (wants_word_timestamps or wants_segment_timestamps):
+            response_format = "verbose_json"
+
+        if response_format:
+            data["response_format"] = response_format
+        if provider_name in {"groq", "openai"} and response_format == "verbose_json":
+            if wants_word_timestamps:
+                # A single multipart value is deliberately used here. httpx's
+                # async multipart encoder doesn't accept a duplicate-key tuple
+                # list; this explicitly requests the word timings needed by
+                # the timestamp-download action in the user UI.
+                data["timestamp_granularities[]"] = "word"
         if options.get("temperature") is not None:
             data["temperature"] = str(options["temperature"])
 
@@ -2664,7 +2706,17 @@ class TranscriptionService:
                     raise HTTPException(status_code=415, detail="unsupported media type, upload an audio/video file")
 
                 self._update_job_progress(job, 6, "preparing-audio")
-                prepared_path = await self.media.extract_audio(job.raw_path, job.source_filename, job.source_content_type)
+                output_format = (
+                    self.settings.processing.extracted_audio_format
+                    if job.provider == "local"
+                    else self.settings.processing.remote_extracted_audio_format
+                )
+                prepared_path = await self.media.extract_audio(
+                    job.raw_path,
+                    job.source_filename,
+                    job.source_content_type,
+                    output_format=output_format,
+                )
                 if job.cancel_event.is_set():
                     raise asyncio.CancelledError("transcription job cancelled")
                 duration = await self.media.probe_duration(prepared_path)
@@ -2756,7 +2808,17 @@ class TranscriptionService:
             if not (is_video_file(source_name, source_content_type) or is_audio_file(source_name, source_content_type)):
                 raise HTTPException(status_code=415, detail="unsupported media type, upload an audio/video file")
 
-            prepared_path = await self.media.extract_audio(raw_path, source_name, source_content_type)
+            output_format = (
+                self.settings.processing.extracted_audio_format
+                if provider == "local"
+                else self.settings.processing.remote_extracted_audio_format
+            )
+            prepared_path = await self.media.extract_audio(
+                raw_path,
+                source_name,
+                source_content_type,
+                output_format=output_format,
+            )
             duration = await self.media.probe_duration(prepared_path)
 
             if provider == "local":

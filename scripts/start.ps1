@@ -224,6 +224,30 @@ function Get-HfTokenFromEnvironment {
   return ""
 }
 
+function Set-OutboundProxyEnvironment {
+  $enabled = (Get-EnvValue "OUTBOUND_PROXY_ENABLED" "false").Trim().ToLowerInvariant()
+  $proxyUrl = (Get-EnvValue "OUTBOUND_PROXY_URL" "").Trim()
+  $noProxy = (Get-EnvValue "OUTBOUND_NO_PROXY" "localhost,127.0.0.1,::1").Trim()
+  $proxyNames = @("HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "http_proxy", "https_proxy", "all_proxy")
+
+  if ($enabled -in @("1", "true", "yes", "on")) {
+    if ([string]::IsNullOrWhiteSpace($proxyUrl)) {
+      Fail "OUTBOUND_PROXY_ENABLED is true but OUTBOUND_PROXY_URL is empty."
+    }
+    foreach ($name in $proxyNames) {
+      [Environment]::SetEnvironmentVariable($name, $proxyUrl, "Process")
+    }
+    [Environment]::SetEnvironmentVariable("NO_PROXY", $noProxy, "Process")
+    [Environment]::SetEnvironmentVariable("no_proxy", $noProxy, "Process")
+    Write-Ok "Outbound proxy enabled from OUTBOUND_PROXY_URL"
+  } else {
+    foreach ($name in @($proxyNames + @("NO_PROXY", "no_proxy"))) {
+      [Environment]::SetEnvironmentVariable($name, $null, "Process")
+    }
+    Write-Ok "Outbound proxy disabled by OUTBOUND_PROXY_ENABLED"
+  }
+}
+
 function Set-HfTokenForProcess {
   param([string]$Token)
   if ([string]::IsNullOrWhiteSpace($Token)) {
@@ -741,6 +765,18 @@ try {
   }
   Write-Ok "Repository root: $repoRoot"
 
+  # Make the .env-controlled proxy available before any bootstrap subprocess
+  # (pip, model download, smoke test, or uvicorn) is started.
+  $envFile = Join-Path $repoRoot ".env"
+  $envExample = Join-Path $repoRoot ".env.example"
+  if (-not (Test-Path $envFile)) {
+    Copy-Item -Path $envExample -Destination $envFile
+    $script:CreatedEnvFile = $true
+    Write-Ok "Created .env from .env.example"
+  }
+  Import-DotEnv -FilePath $envFile
+  Set-OutboundProxyEnvironment
+
   Write-Stage "Resolve Python 3.10+ and prepare virtual environment"
   $pythonExe = Resolve-PythonExecutable -PreferredPython $Python -RepoRoot $repoRoot
   $venvDir = Join-Path $repoRoot ".venv"
@@ -764,7 +800,7 @@ try {
 
   $importCheck = @'
 import importlib
-mods = ["fastapi", "uvicorn", "httpx", "multipart", "pydantic", "yaml", "dotenv", "pytest", "faster_whisper", "ctranslate2"]
+mods = ["fastapi", "uvicorn", "httpx", "python_socks", "multipart", "pydantic", "yaml", "dotenv", "pytest", "faster_whisper", "ctranslate2"]
 missing = []
 for name in mods:
     try:
@@ -819,6 +855,8 @@ print("Python import check passed:", ", ".join(mods))
       Write-Ok "env: $($kv[0].Trim()) set from -EnvVars"
     }
   }
+
+  Set-OutboundProxyEnvironment
 
   $runtimeDir = Get-EnvValue "STORAGE_RUNTIME_DIR" "runtime"
   $uploadDir = Get-EnvValue "STORAGE_UPLOAD_DIR" "runtime/uploads"

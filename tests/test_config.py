@@ -1,10 +1,11 @@
 ﻿from __future__ import annotations
 
+import os
 import textwrap
 
 import pytest
 
-from api.app.config import Settings, load_settings
+from api.app.config import Settings, configure_outbound_proxy_env, load_settings
 
 
 def test_default_settings() -> None:
@@ -64,3 +65,33 @@ def test_openai_enabled_requires_base_url() -> None:
     data["providers"]["openai"]["base_url"] = ""
     with pytest.raises(ValueError, match="providers.openai"):
         Settings.model_validate(data)
+
+
+def test_outbound_socks_proxy_is_applied_to_standard_environment(monkeypatch) -> None:
+    monkeypatch.setenv("HTTP_PROXY", "http://old-proxy:8080")
+    settings = Settings.model_validate(
+        {
+            "network": {
+                "proxy_enabled": True,
+                "proxy_url": "socks5h://127.0.0.1:2080",
+                "no_proxy": "localhost,127.0.0.1,::1",
+            }
+        }
+    )
+
+    configure_outbound_proxy_env(settings)
+
+    assert os.environ["HTTP_PROXY"] == "socks5h://127.0.0.1:2080"
+    assert os.environ["HTTPS_PROXY"] == "socks5h://127.0.0.1:2080"
+    assert os.environ["ALL_PROXY"] == "socks5h://127.0.0.1:2080"
+    assert os.environ["NO_PROXY"] == "localhost,127.0.0.1,::1"
+
+
+def test_disabling_outbound_proxy_clears_inherited_proxy_environment(monkeypatch) -> None:
+    monkeypatch.setenv("HTTPS_PROXY", "http://old-proxy:8080")
+    monkeypatch.setenv("ALL_PROXY", "socks5://old-proxy:1080")
+
+    configure_outbound_proxy_env(Settings())
+
+    assert "HTTPS_PROXY" not in os.environ
+    assert "ALL_PROXY" not in os.environ

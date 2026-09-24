@@ -103,6 +103,18 @@ chmod +x scripts/start.sh
 
 Run `./scripts/start.sh --help` for the full option list.
 
+## Outbound proxy
+
+When this machine needs a proxy for Groq, Deepgram, model downloads, or live WebSocket connections, configure it once in `.env` before launching:
+
+```dotenv
+OUTBOUND_PROXY_ENABLED=true
+OUTBOUND_PROXY_URL=socks5h://127.0.0.1:2080
+OUTBOUND_NO_PROXY=localhost,127.0.0.1,::1
+```
+
+Both launchers export the standard proxy environment variables before they run setup, tests, smoke checks, or the server. Set `OUTBOUND_PROXY_ENABLED=false` to disable and clear inherited proxy variables.
+
 ## Live accuracy settings
 
 Recommended accuracy-oriented values are in:

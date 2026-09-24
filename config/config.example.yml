@@ -26,7 +26,17 @@ processing:
   audio_channels: 1
   always_extract_audio: true
   extracted_audio_format: wav
+  # API providers receive a compact audio file; this avoids large multipart
+  # uploads through proxies while keeping the local Whisper path on WAV.
+  remote_extracted_audio_format: mp3
+  remote_audio_bitrate_kbps: 48
   preserve_original_upload: false
+
+network:
+  # Set through OUTBOUND_PROXY_* in .env for deployments that require a proxy.
+  proxy_enabled: false
+  proxy_url: ""
+  no_proxy: localhost,127.0.0.1,::1
 
 admin:
   enabled: true

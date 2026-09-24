@@ -95,6 +95,48 @@ log(){  printf '\033[1;32m[tootak]\033[0m %s\n' "$*"; }
 warn(){ printf '\033[1;33m[tootak]\033[0m %s\n' "$*"; }
 fail(){ printf '\033[1;31m[tootak]\033[0m %s\n' "$*" >&2; exit 1; }
 
+# Only load the three proxy values explicitly. Sourcing the entire .env would
+# break values such as prompts containing spaces and would execute shell syntax.
+read_env_value(){
+  local key="$1" path="$2"
+  awk -v key="$key" '
+    { sub(/\r$/, "") }
+    $0 ~ "^[[:space:]]*" key "[[:space:]]*=" {
+      sub(/^[^=]*=/, "")
+      gsub(/^[[:space:]]+|[[:space:]]+$/, "")
+      if ((substr($0, 1, 1) == "\"" && substr($0, length($0), 1) == "\"") || (substr($0, 1, 1) == "\047" && substr($0, length($0), 1) == "\047")) {
+        $0 = substr($0, 2, length($0) - 2)
+      }
+      print
+      exit
+    }
+  ' "$path"
+}
+
+apply_outbound_proxy_from_env(){
+  local env_path="$1" enabled proxy_url bypass
+  enabled="$(read_env_value OUTBOUND_PROXY_ENABLED "$env_path")"
+  proxy_url="$(read_env_value OUTBOUND_PROXY_URL "$env_path")"
+  bypass="$(read_env_value OUTBOUND_NO_PROXY "$env_path")"
+
+  case "${enabled,,}" in
+    1|true|yes|on)
+      [[ -n "$proxy_url" ]] || fail "OUTBOUND_PROXY_ENABLED is true but OUTBOUND_PROXY_URL is empty"
+      export HTTP_PROXY="$proxy_url" HTTPS_PROXY="$proxy_url" ALL_PROXY="$proxy_url"
+      export http_proxy="$proxy_url" https_proxy="$proxy_url" all_proxy="$proxy_url"
+      if [[ -n "$bypass" ]]; then export NO_PROXY="$bypass" no_proxy="$bypass"; fi
+      log "Outbound proxy enabled from OUTBOUND_PROXY_URL"
+      ;;
+    *)
+      unset HTTP_PROXY HTTPS_PROXY ALL_PROXY http_proxy https_proxy all_proxy NO_PROXY no_proxy
+      log "Outbound proxy disabled by OUTBOUND_PROXY_ENABLED"
+      ;;
+  esac
+}
+
+[[ -f .env ]] || { log "Creating .env from .env.example"; cp .env.example .env; }
+apply_outbound_proxy_from_env .env
+
 pause_before_exit(){
   local code="$1"; local reason="${2:-Script stopped}"
   if [[ "$NO_PAUSE" == "1" || ! -t 0 ]]; then return; fi
@@ -142,7 +184,6 @@ else
 fi
 
 # ----------------------------- config + dirs ---------------------------------
-[[ -f .env ]] || { log "Creating .env from .env.example"; cp .env.example .env; }
 [[ -f config/config.yml ]] || { log "Creating config/config.yml from example"; mkdir -p config; cp config/config.example.yml config/config.yml; }
 mkdir -p runtime/models runtime/uploads runtime/outputs runtime/cache runtime/checkpoints runtime/logs runtime/smoke
 

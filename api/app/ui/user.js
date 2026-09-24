@@ -58,6 +58,7 @@ const I18N = {
     tip_start: "شروع پردازش",
     tip_copy: "کپی متن",
     tip_download: "دانلود فایل",
+    tip_download_words: "دانلود تایم‌استمپ‌های واژه‌ها",
     tip_prompt_modal: "پرامپت آماده سازی خروجی",
     tip_copy_prompt: "کپی پرامپت",
     tip_close: "بستن",
@@ -87,6 +88,8 @@ const I18N = {
     status_copy_fail: "کپی انجام نشد.",
     status_download_empty: "خروجی برای دانلود وجود ندارد.",
     status_download_ok: "فایل خروجی دانلود شد.",
+    status_download_words_empty: "تایم‌استمپ واژه‌ها موجود نیست.",
+    status_download_words_ok: "فایل تایم‌استمپ واژه‌ها دانلود شد.",
     status_load_error: "خطا در بارگذاری اولیه: {{msg}}",
     status_settings_saved: "تنظیمات ذخیره شد.",
     status_settings_invalid: "اورلپ باید کمتر از چانک باشد.",
@@ -193,6 +196,7 @@ const I18N = {
     tip_start: "Start processing",
     tip_copy: "Copy text",
     tip_download: "Download file",
+    tip_download_words: "Download word timestamps",
     tip_prompt_modal: "Prompt helper",
     tip_copy_prompt: "Copy prompt",
     tip_close: "Close",
@@ -222,6 +226,8 @@ const I18N = {
     status_copy_fail: "Copy failed.",
     status_download_empty: "No output to download.",
     status_download_ok: "Output file downloaded.",
+    status_download_words_empty: "Word timestamps not available.",
+    status_download_words_ok: "Word timestamps file downloaded.",
     status_load_error: "Initial load failed: {{msg}}",
     status_settings_saved: "Settings saved.",
     status_settings_invalid: "Overlap must be smaller than chunk size.",
@@ -332,6 +338,7 @@ const els = {
   transcribeJobMeta: $("transcribeJobMeta"),
   btnCopyText: $("btnCopyText"),
   btnDownloadResult: $("btnDownloadResult"),
+  btnDownloadWords: $("btnDownloadWords"),
   queueSummary: $("queueSummary"),
   jobQueueList: $("jobQueueList"),
 
@@ -2088,6 +2095,50 @@ function downloadResultHandler() {
   toastByKey("status_download_ok", "success");
 }
 
+function downloadWordsHandler() {
+  const result = state.latestResult;
+  const words = result?.words;
+  if (!words || !Array.isArray(words) || words.length === 0) {
+    setStatusByKey("status_download_words_empty", "warn");
+    toastByKey("status_download_words_empty", "info");
+    return;
+  }
+
+  const selected = getSelectedQueueItem();
+  const baseName = selected?.sourceFilename
+    ? String(selected.sourceFilename).replace(/\.[a-z0-9]+$/i, "")
+    : "";
+
+  const timestamp = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
+  const csvRows = [
+    "index,word,start,end,duration,probability",
+    ...words.map((w, idx) => {
+      const start = Number(w?.start);
+      const end = Number(w?.end);
+      const probability = Number(w?.probability);
+      const safeStart = Number.isFinite(start) ? start : 0;
+      const safeEnd = Number.isFinite(end) ? end : safeStart;
+      const prob = Number.isFinite(probability) ? probability.toFixed(4) : "";
+      return `${idx + 1},"${String(w?.word || "").replace(/"/g, '""')}",${safeStart.toFixed(3)},${safeEnd.toFixed(3)},${Math.max(0, safeEnd - safeStart).toFixed(3)},${prob}`;
+    }),
+  ];
+  // A UTF-8 BOM makes Persian words display correctly in Excel. One download
+  // per click is more reliable than triggering two browser downloads.
+  const csvBlob = new Blob(["\uFEFF", csvRows.join("\n")], { type: "text/csv;charset=utf-8" });
+  const csvUrl = URL.createObjectURL(csvBlob);
+
+  const csvLink = document.createElement("a");
+  csvLink.href = csvUrl;
+  csvLink.download = baseName ? `${baseName}-timestamps-${timestamp}.csv` : `timestamps-${timestamp}.csv`;
+  document.body.appendChild(csvLink);
+  csvLink.click();
+  csvLink.remove();
+  URL.revokeObjectURL(csvUrl);
+
+  setStatusByKey("status_download_words_ok", "ok");
+  toastByKey("status_download_words_ok", "success");
+}
+
 function copyPromptHandler() {
   const prompt = String(els.preparedPromptText?.value || "");
   if (!prompt.trim()) return;
@@ -2168,6 +2219,7 @@ function attachEvents() {
   els.transcribeForm?.addEventListener("submit", transcribeHandler);
   els.btnCopyText?.addEventListener("click", copyTextHandler);
   els.btnDownloadResult?.addEventListener("click", downloadResultHandler);
+  els.btnDownloadWords?.addEventListener("click", downloadWordsHandler);
   els.jobQueueList?.addEventListener("click", (event) => {
     const target = event.target instanceof Element ? event.target : null;
     if (!target) return;

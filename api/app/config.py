@@ -5,6 +5,7 @@ import os
 from functools import lru_cache
 from pathlib import Path
 from typing import Any, Dict, List, Literal, Optional
+from urllib.parse import urlparse
 
 import yaml
 from dotenv import load_dotenv
@@ -41,7 +42,29 @@ class ProcessingSection(BaseModel):
     audio_channels: int = 1
     always_extract_audio: bool = True
     extracted_audio_format: str = "wav"
+    remote_extracted_audio_format: Literal["wav", "mp3"] = "mp3"
+    remote_audio_bitrate_kbps: int = 48
     preserve_original_upload: bool = False
+
+
+class NetworkSection(BaseModel):
+    """Outbound network policy inherited by every child process."""
+
+    proxy_enabled: bool = False
+    proxy_url: str = ""
+    no_proxy: str = "localhost,127.0.0.1,::1"
+
+    @model_validator(mode="after")
+    def _validate_proxy(self) -> "NetworkSection":
+        if not self.proxy_enabled:
+            return self
+
+        parsed = urlparse(self.proxy_url)
+        if parsed.scheme not in {"http", "https", "socks4", "socks4a", "socks5", "socks5h"} or not parsed.hostname:
+            raise ValueError(
+                "network.proxy_url must be a valid http(s) or SOCKS proxy URL when network.proxy_enabled is true"
+            )
+        return self
 
 
 class AdminSection(BaseModel):
@@ -172,6 +195,7 @@ class Settings(BaseModel):
     app: AppSection = Field(default_factory=AppSection)
     storage: StorageSection = Field(default_factory=StorageSection)
     processing: ProcessingSection = Field(default_factory=ProcessingSection)
+    network: NetworkSection = Field(default_factory=NetworkSection)
     admin: AdminSection = Field(default_factory=AdminSection)
     transcription: TranscriptionSection = Field(default_factory=TranscriptionSection)
     local: LocalSection = Field(default_factory=LocalSection)
@@ -197,6 +221,8 @@ class Settings(BaseModel):
 
         if self.storage.max_upload_mb <= 0:
             raise ValueError("storage.max_upload_mb must be positive")
+        if self.processing.remote_audio_bitrate_kbps <= 0:
+            raise ValueError("processing.remote_audio_bitrate_kbps must be positive")
         if self.downloads.max_concurrent_jobs <= 0:
             raise ValueError("downloads.max_concurrent_jobs must be positive")
         if self.local.long_audio_chunk_minutes <= 0:
@@ -283,7 +309,13 @@ def _apply_env_overrides(config_dict: Dict[str, Any]) -> Dict[str, Any]:
         "PROCESSING_AUDIO_CHANNELS": ("processing.audio_channels", int),
         "PROCESSING_ALWAYS_EXTRACT_AUDIO": ("processing.always_extract_audio", _parse_bool),
         "PROCESSING_EXTRACTED_AUDIO_FORMAT": ("processing.extracted_audio_format", str),
+        "PROCESSING_REMOTE_EXTRACTED_AUDIO_FORMAT": ("processing.remote_extracted_audio_format", str),
+        "PROCESSING_REMOTE_AUDIO_BITRATE_KBPS": ("processing.remote_audio_bitrate_kbps", int),
         "PROCESSING_PRESERVE_ORIGINAL_UPLOAD": ("processing.preserve_original_upload", _parse_bool),
+
+        "OUTBOUND_PROXY_ENABLED": ("network.proxy_enabled", _parse_bool),
+        "OUTBOUND_PROXY_URL": ("network.proxy_url", str),
+        "OUTBOUND_NO_PROXY": ("network.no_proxy", str),
 
         "ADMIN_ENABLED": ("admin.enabled", _parse_bool),
         "ADMIN_REQUIRE_AUTH": ("admin.require_auth", _parse_bool),
@@ -388,8 +420,49 @@ def _ensure_runtime_dirs(settings: Settings) -> None:
         Path(raw_path).mkdir(parents=True, exist_ok=True)
 
 
+_PROXY_ENV_KEYS = (
+    "HTTP_PROXY",
+    "HTTPS_PROXY",
+    "ALL_PROXY",
+    "http_proxy",
+    "https_proxy",
+    "all_proxy",
+)
+
+
+def configure_outbound_proxy_env(settings: Settings) -> None:
+    """Apply the configured proxy once, before HTTP/WebSocket clients are created.
+
+    Libraries used by this service (httpx, websockets, Hugging Face tooling and
+    their child processes) consistently honor these standard environment names.
+    Clearing them when disabled makes the switch deterministic even if the
+    launcher or shell had inherited an older proxy configuration.
+    """
+
+    if not settings.network.proxy_enabled:
+        for key in _PROXY_ENV_KEYS:
+            os.environ.pop(key, None)
+        return
+
+    proxy_url = settings.network.proxy_url.strip()
+    # ``socks://`` is accepted by some proxy tools but not by httpx/websockets.
+    if proxy_url.startswith("socks://"):
+        proxy_url = "socks5://" + proxy_url[len("socks://"):]
+
+    for key in _PROXY_ENV_KEYS:
+        os.environ[key] = proxy_url
+
+    no_proxy = settings.network.no_proxy.strip()
+    if no_proxy:
+        os.environ["NO_PROXY"] = no_proxy
+        os.environ["no_proxy"] = no_proxy
+    else:
+        os.environ.pop("NO_PROXY", None)
+        os.environ.pop("no_proxy", None)
+
+
 def load_settings(config_file: str | None = None) -> Settings:
-    load_dotenv(override=False)
+    load_dotenv(dotenv_path=os.getenv("ENV_FILE", ".env"), override=False)
 
     default_data = Settings().model_dump()
     cfg_path = Path(config_file or os.getenv("APP_CONFIG_FILE", "config/config.yml"))
@@ -402,6 +475,7 @@ def load_settings(config_file: str | None = None) -> Settings:
     except ValidationError as exc:
         raise ValueError(f"Invalid configuration: {exc}") from exc
 
+    configure_outbound_proxy_env(settings)
     _ensure_runtime_dirs(settings)
     return settings
 

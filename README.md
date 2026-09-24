@@ -78,6 +78,14 @@ Set-ExecutionPolicy -Scope Process Bypass -Force
 
 The launchers can prepare the environment, install dependencies, validate configuration, run tests and smoke checks, and start the service.
 
+Before starting a remote Groq transcription, set these values in `.env`:
+
+```dotenv
+PROVIDER_GROQ_ENABLED=true
+PROVIDER_GROQ_API_KEY=gsk_...
+PROVIDER_GROQ_MODEL=whisper-large-v3-turbo
+```
+
 ## Local interfaces
 
 - User UI: `http://127.0.0.1:8030/`
@@ -108,6 +116,10 @@ curl -X POST http://127.0.0.1:8030/transcribe \
   -F 'language=fa'
 ```
 
+### Word timestamp download
+
+The user UI requests word timings for Groq and OpenAI-compatible Whisper transcription. After a completed job, select it from the queue and use the table/download icon beside the transcript to download a UTF-8 CSV. The columns are `word`, `start`, `end`, `duration`, and `probability`; this works well in Excel with Persian text.
+
 ## Model administration
 
 The admin API supports:
@@ -135,6 +147,18 @@ environment variables > config.yml > application defaults
 Use `.env.example` and `config/config.example.yml` as the configuration contracts.
 
 Provider fallback keys can be configured as comma-separated values. Retryable upstream errors rotate through available keys. Chunked remote jobs persist checkpoints under `runtime/checkpoints/` so retries can continue from completed work.
+
+### Outbound proxy
+
+Set these values in `.env` when the host must reach remote providers through a proxy:
+
+```dotenv
+OUTBOUND_PROXY_ENABLED=true
+OUTBOUND_PROXY_URL=socks5h://127.0.0.1:2080
+OUTBOUND_NO_PROXY=localhost,127.0.0.1,::1
+```
+
+The setting is applied to HTTP clients, WebSocket clients, model downloads, and launcher child processes. Use `OUTBOUND_PROXY_ENABLED=false` to clear inherited proxy variables. Remote transcription is encoded as compact MP3 by default (`PROCESSING_REMOTE_*`) so multipart uploads remain reliable through constrained proxies.
 
 ## Repository structure
 

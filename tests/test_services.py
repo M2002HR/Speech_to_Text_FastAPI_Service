@@ -369,6 +369,39 @@ def test_api_transcriber_rotates_provider_keys_on_rate_limit() -> None:
         assert out["metadata"]["provider_key_index"] == 2
 
 
+def test_groq_request_asks_for_word_timestamps() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        settings = _settings()
+        settings.providers.groq.enabled = True
+        settings.providers.groq.api_key = "key-1"
+        audio = Path(tmp) / "audio.mp3"
+        audio.write_bytes(b"audio")
+        requests = []
+
+        class _Resp:
+            status_code = 200
+            headers = {"content-type": "application/json"}
+
+            def json(self):
+                return {"text": "ok", "words": [{"word": "ok", "start": 0, "end": 1}]}
+
+        class _Client:
+            async def post(self, *args, **kwargs):
+                requests.append(kwargs["data"])
+                return _Resp()
+
+        out = _run(
+            APITranscriber(settings, _Client()).transcribe(  # type: ignore[arg-type]
+                "groq",
+                audio,
+                {"response_format": "verbose_json", "word_timestamps": True, "segment_timestamps": True},
+            )
+        )
+
+        assert requests[0]["timestamp_granularities[]"] == "word"
+        assert out["words"][0]["word"] == "ok"
+
+
 def test_local_transcriber_transcribe_uses_duration_hint_for_progress() -> None:
     settings = _settings()
     transcriber = LocalTranscriber(settings)
