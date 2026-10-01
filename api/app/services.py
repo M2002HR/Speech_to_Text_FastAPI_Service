@@ -2101,6 +2101,32 @@ class TranscriptionService:
             if duration_seconds is None and output.get("duration_seconds") is not None:
                 duration_seconds = float(output["duration_seconds"])
 
+            # API providers return word timings at the top level of verbose_json.
+            # Local faster-whisper also embeds them in each segment. Prefer the
+            # top-level list when present so a chunk is never counted twice.
+            if word_timestamps:
+                chunk_words = output.get("words")
+                if not isinstance(chunk_words, list) or not chunk_words:
+                    chunk_words = [
+                        word
+                        for segment in (output.get("segments") or [])
+                        if isinstance(segment, dict)
+                        for word in (segment.get("words") or [])
+                    ]
+                for word in chunk_words:
+                    if not isinstance(word, dict):
+                        continue
+                    start = offset + float(word.get("start", 0.0))
+                    end = offset + float(word.get("end", word.get("start", 0.0)))
+                    all_words.append(
+                        {
+                            "start": start,
+                            "end": max(start, end),
+                            "word": str(word.get("word") or ""),
+                            "probability": word.get("probability"),
+                        }
+                    )
+
             segs = output.get("segments") if isinstance(output.get("segments"), list) else []
             if not segs:
                 text_fallback = str(output.get("text") or "").strip()
@@ -2134,18 +2160,6 @@ class TranscriptionService:
                     }
                 )
 
-                if word_timestamps:
-                    for w in (seg.get("words") if isinstance(seg.get("words"), list) else []):
-                        ws = offset + float(w.get("start", 0.0))
-                        we = offset + float(w.get("end", w.get("start", 0.0)))
-                        all_words.append(
-                            {
-                                "start": ws,
-                                "end": max(ws, we),
-                                "word": str(w.get("word") or ""),
-                                "probability": w.get("probability"),
-                            }
-                        )
 
         candidates.sort(key=lambda x: (x["start"], x["end"]))
 

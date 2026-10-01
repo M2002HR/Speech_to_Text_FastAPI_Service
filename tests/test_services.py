@@ -331,6 +331,41 @@ def test_api_transcription_chunks_for_visible_progress() -> None:
         assert out["metadata"]["chunking"]["progress_mode"] == "time-window-chunks"
 
 
+def test_chunk_merge_keeps_top_level_api_word_timestamps() -> None:
+    settings = _settings()
+    svc = TranscriptionService(settings)
+    runs = [
+        {
+            "start": offset,
+            "end": offset + 120.0,
+            "output": {
+                "text": text,
+                "language": "fa",
+                "duration_seconds": 120.0,
+                "segments": None,
+                "words": [{"word": text, "start": 1.0, "end": 1.5}],
+            },
+        }
+        for offset, text in [(0.0, "سلام"), (105.0, "دنیا")]
+    ]
+
+    try:
+        merged = svc._merge_chunk_outputs(
+            chunk_runs=runs,
+            segment_timestamps=True,
+            word_timestamps=True,
+            similarity_threshold=0.72,
+            max_word_overlap=48,
+        )
+    finally:
+        _run(svc.close())
+
+    assert [(word["word"], word["start"], word["end"]) for word in merged["words"]] == [
+        ("سلام", 1.0, 1.5),
+        ("دنیا", 106.0, 106.5),
+    ]
+
+
 def test_api_transcriber_rotates_provider_keys_on_rate_limit() -> None:
     with tempfile.TemporaryDirectory() as tmp:
         settings = _settings()
